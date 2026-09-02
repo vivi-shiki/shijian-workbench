@@ -80,7 +80,8 @@ def recognize(args, model, source):
 
 def main():
     parser = argparse.ArgumentParser(description="Run models sequentially over ordered PDF volumes; resume safely.")
-    parser.add_argument("--project-id", default="yiyuji-four-volumes")
+    parser.add_argument("--project-id", required=True)
+    parser.add_argument("--title", help="Project title; defaults to an existing project title or the project id.")
     parser.add_argument("--service-url", default="http://192.168.50.100:20000")
     parser.add_argument("--api-url", default="http://127.0.0.1:3100")
     parser.add_argument("--timeout", type=int, default=1200)
@@ -89,6 +90,9 @@ def main():
     args = parser.parse_args()
     directory = ROOT / "data/projects" / args.project_id
     source = json.loads((directory / "source-images.json").read_text(encoding="utf-8"))
+    project_path = directory / "project.json"
+    existing_project = json.loads(project_path.read_text(encoding="utf-8")) if project_path.exists() else {}
+    title = args.title or existing_project.get("title") or args.project_id
     pages = source["pages"][:args.limit] if args.limit else source["pages"]
     health = json.load(urllib.request.urlopen(args.service_url + "/health", timeout=15))
     write_json(directory / "remote-health.json", health)
@@ -99,7 +103,7 @@ def main():
             "service_url": args.service_url, "workflow": {"ocr_provider": model, "reading_order": "model"},
             "pages": [make_page(page) for page in pages]}
         api(args.api_url, "POST", f"/api/projects/{args.project_id}/results",
-            {"title": "疑雨集注 · 四卷", "source": source, "result": result})
+            {"title": title, "source": source, "result": result})
     progress = {"started_at": now_iso(), "total": len(pages) * len(MODELS), "completed": 0, "errors": [], "models": {}}
     for model in MODELS:
         timings = []

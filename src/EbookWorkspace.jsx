@@ -22,10 +22,10 @@ import {
 } from "./ebook-format.js";
 
 const KIND_LABELS = {
-  heading: "篇题",
+  heading: "目录标题",
   book_text: "书籍文字",
   biography: "传记",
-  poem: "诗词",
+  poem: "诗作",
   preface: "序跋",
   note: "注文",
   colophon: "题跋",
@@ -88,6 +88,7 @@ export default function EbookWorkspace({ project }) {
   const [startPage, setStartPage] = React.useState(1);
   const [endPage, setEndPage] = React.useState(Math.min(30, project.pages.length));
   const [model, setModel] = React.useState("");
+  const [forceRun, setForceRun] = React.useState(false);
   const editVersion = React.useRef(0);
   const appliedVersion = React.useRef(0);
 
@@ -111,7 +112,7 @@ export default function EbookWorkspace({ project }) {
   const loadDocument = React.useCallback(async (preserveEditor = false) => {
     const response = await fetch(`/api/projects/${project.id}/ebook`);
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "无法读取诗词整理数据");
+    if (!response.ok) throw new Error(payload.error || "无法读取诗歌类古籍结构化数据");
     applyPayload(payload, preserveEditor);
     return payload;
   }, [applyPayload, project.id]);
@@ -142,7 +143,11 @@ export default function EbookWorkspace({ project }) {
         setSaveState("saving");
         const response = await fetch(`/api/projects/${project.id}/ebook`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Oldbook-Actor": "human",
+            "X-Oldbook-Source": "ebook-json-editor"
+          },
           body: JSON.stringify(document)
         });
         const payload = await response.json();
@@ -181,7 +186,11 @@ export default function EbookWorkspace({ project }) {
     try {
       const response = await fetch(`/api/projects/${project.id}/ebook`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Oldbook-Actor": "human",
+          "X-Oldbook-Source": "ebook-json-editor"
+        },
         body: JSON.stringify(document)
       });
       const payload = await response.json();
@@ -218,11 +227,12 @@ export default function EbookWorkspace({ project }) {
           result_ids: resultIds,
           start_page: startPage,
           end_page: endPage,
-          model
+          model,
+          force: forceRun
         })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "诗词整理任务失败");
+      if (!response.ok) throw new Error(payload.error || "诗歌类古籍结构化任务失败");
       applyPayload(payload);
       appliedVersion.current = editVersion.current;
       setSaveState("saved");
@@ -235,8 +245,8 @@ export default function EbookWorkspace({ project }) {
     }
   }
 
-  if (loading) return <main className="ebook-loading"><LoaderCircle className="spin" size={22} />正在读取诗词整理数据...</main>;
-  if (!document) return <main className="ebook-loading"><AlertCircle size={22} />{error || "诗词整理数据不可用"}</main>;
+  if (loading) return <main className="ebook-loading"><LoaderCircle className="spin" size={22} />正在读取诗歌类古籍结构化数据...</main>;
+  if (!document) return <main className="ebook-loading"><AlertCircle size={22} />{error || "诗歌类古籍结构化数据不可用"}</main>;
 
   const generation = document.generation || {};
   const totalPages = Math.max(1, (document.source?.page_range?.end || endPage) - (document.source?.page_range?.start || startPage) + 1);
@@ -244,7 +254,7 @@ export default function EbookWorkspace({ project }) {
 
   return (
     <main className="ebook-workspace">
-      <section className="ebook-runbar" aria-label="诗词整理任务设置">
+      <section className="ebook-runbar" aria-label="诗歌类古籍结构化任务设置">
         <div className={`api-state ${config?.configured ? "is-ready" : "is-missing"}`}>
           <KeyRound size={16} />
           <span><strong>{config?.configured ? "硅基流动已连接" : "等待 API Key"}</strong><small>{config?.model}</small></span>
@@ -263,6 +273,10 @@ export default function EbookWorkspace({ project }) {
         <label className="compact-field">止页<input type="number" min={startPage} max={project.pages.length} value={endPage}
           onChange={event => setEndPage(Math.min(project.pages.length, Number(event.target.value) || 30))} disabled={running} /></label>
         <label className="model-field">模型<input value={model} onChange={event => setModel(event.target.value)} disabled={running} /></label>
+        <label className={`force-run-toggle ${forceRun ? "is-selected" : ""}`}>
+          <input type="checkbox" checked={forceRun} onChange={event => setForceRun(event.target.checked)} disabled={running} />
+          覆盖范围重跑
+        </label>
         <button className="button primary ebook-run" onClick={runBatch}
           disabled={running || !config?.configured || !resultIds.length || startPage > endPage}>
           {running ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
@@ -291,7 +305,7 @@ export default function EbookWorkspace({ project }) {
               {entry.review_status === "reviewed" ? <Check size={14} /> : <CircleDot size={12} />}
             </button>
           ))}
-          {!document.entries.length && <p>运行首批页面后，篇题、诗词、序跋和注文会显示在这里。</p>}
+          {!document.entries.length && <p>运行首批页面后，目录、诗作、序跋、传记和注文会显示在这里。</p>}
         </div>
       </aside>
 

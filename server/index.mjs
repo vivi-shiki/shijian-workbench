@@ -2,6 +2,7 @@ import express from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { HistoryStore } from "./change-history.mjs";
 import { EbookStore } from "./ebook-store.mjs";
 import { ProjectStore } from "./project-store.mjs";
 
@@ -12,16 +13,17 @@ for (const envFile of [".env.local", ".env"]) {
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
 const projectsRoot = path.join(rootDir, "data", "projects");
-const store = new ProjectStore(projectsRoot);
-const ebookStore = new EbookStore(projectsRoot, store);
+const historyStore = new HistoryStore(projectsRoot);
+const store = new ProjectStore(projectsRoot, historyStore);
+const ebookStore = new EbookStore(projectsRoot, store, historyStore);
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 app.use("/data", express.static(path.join(rootDir, "data")));
 
 function safeProjectId(projectId) {
-  const id = projectId || defaultProjectId();
-  if (!/^[a-z0-9][a-z0-9-]*$/i.test(id)) {
+  const id = projectId;
+  if (typeof id !== "string" || !/^[a-z0-9][a-z0-9-]*$/i.test(id)) {
     const error = new Error("Invalid project id");
     error.status = 400;
     throw error;
@@ -37,12 +39,41 @@ function exportDirFor(projectId) {
   return path.join(projectDirFor(projectId), "exports");
 }
 
-function defaultProjectId() {
-  return process.env.OLDBOOK_PROJECT_ID || "yiyuji-photos";
+async function availableProjectIds() {
+  const entries = await fs.readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
+  return entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
 }
 
-async function readProject(projectId = defaultProjectId(), resultId) {
-  return store.view(safeProjectId(projectId), resultId);
+async function resolveDefaultProjectId() {
+  const configured = process.env.OLDBOOK_PROJECT_ID;
+  const ids = await availableProjectIds();
+  if (configured && ids.includes(configured)) return configured;
+  for (const id of ids) {
+    try {
+      if (!(await store.index(id)).archived) return id;
+    } catch {
+      // Ignore incomplete project directories.
+    }
+  }
+  return ids[0] || "";
+}
+
+function auditFromRequest(req, defaults = {}) {
+  const requestedActor = String(req.get("x-oldbook-actor") || defaults.actor || "human");
+  const actor = /^(human|system|external|ai:[a-z0-9-]+)$/i.test(requestedActor)
+    ? requestedActor
+    : defaults.actor || "human";
+  const requestedSource = String(req.get("x-oldbook-source") || defaults.source || "api");
+  const source = /^[a-z0-9][a-z0-9-]{0,79}$/i.test(requestedSource)
+    ? requestedSource
+    : defaults.source || "api";
+  return { actor, source, note: String(req.get("x-oldbook-note") || "").slice(0, 500) };
+}
+
+async function readProject(projectId, resultId) {
+  const id = projectId || await resolveDefaultProjectId();
+  if (!id) throw Object.assign(new Error("No project.json files found"), { status: 404 });
+  return store.view(safeProjectId(id), resultId);
 }
 
 function orderedPages(project) {
@@ -125,7 +156,7 @@ function buildHtml(project, mode = "edited") {
 
 app.get("/api/project", async (_req, res) => {
   try {
-    res.json(await readProject(defaultProjectId()));
+    res.json(await readProject());
   } catch (error) {
     res.status(404).json({
       error: "project_not_found",
@@ -155,7 +186,12 @@ app.get("/api/projects", async (_req, res) => {
     }
   }
   projects.sort((a, b) => Number(a.archived) - Number(b.archived) || a.id.localeCompare(b.id));
-  res.json({ defaultProjectId: projects.find(p => !p.archived)?.id || defaultProjectId(), projects });
+  const configured = process.env.OLDBOOK_PROJECT_ID;
+  const configuredProject = projects.find(project => project.id === configured);
+  res.json({
+    defaultProjectId: configuredProject?.id || projects.find(project => !project.archived)?.id || projects[0]?.id || null,
+    projects
+  });
 });
 
 app.get("/api/project/:projectId", async (req, res) => {
@@ -176,21 +212,24 @@ async function handleWriteProject(req, res) {
     return;
   }
   const projectId = safeProjectId(req.params.projectId || project.id);
-  res.json(await store.save(projectId, project));
+  res.json(await store.save(projectId, project,
+    auditFromRequest(req, { actor: "human", source: "ocr-workbench" })));
 }
 
 app.put("/api/project", handleWriteProject);
 app.put("/api/project/:projectId", handleWriteProject);
 
 app.post("/api/projects/:projectId/results", async (req, res) => {
-  res.json(await store.importResult(safeProjectId(req.params.projectId), req.body));
+  res.json(await store.importResult(safeProjectId(req.params.projectId), req.body,
+    auditFromRequest(req, { actor: "ai:ocr", source: "ocr-import" })));
 });
 
 app.put("/api/projects/:projectId/results/:resultId/pages/:pageId", async (req, res) => {
   if (req.params.pageId !== req.body.id || !Array.isArray(req.body.regions)) {
     return res.status(400).json({ error: "invalid_page" });
   }
-  res.json(await store.importPage(safeProjectId(req.params.projectId), req.params.resultId, req.body));
+  res.json(await store.importPage(safeProjectId(req.params.projectId), req.params.resultId, req.body,
+    auditFromRequest(req, { actor: "ai:ocr", source: "ocr-batch" })));
 });
 
 app.get("/api/projects/:projectId/ebook", async (req, res) => {
@@ -198,11 +237,22 @@ app.get("/api/projects/:projectId/ebook", async (req, res) => {
 });
 
 app.put("/api/projects/:projectId/ebook", async (req, res) => {
-  res.json(await ebookStore.save(safeProjectId(req.params.projectId), req.body));
+  res.json(await ebookStore.save(safeProjectId(req.params.projectId), req.body,
+    auditFromRequest(req, { actor: "human", source: "ebook-json-editor" })));
 });
 
 app.post("/api/projects/:projectId/ebook/run", async (req, res) => {
   res.json(await ebookStore.run(safeProjectId(req.params.projectId), req.body));
+});
+
+app.get("/api/projects/:projectId/history", async (req, res) => {
+  res.json(await historyStore.read(safeProjectId(req.params.projectId), req.query.limit));
+});
+
+app.get("/api/projects/:projectId/ai-memory", async (req, res) => {
+  const projectId = safeProjectId(req.params.projectId);
+  const history = await historyStore.read(projectId, 1);
+  res.json({ overview: history.overview, context: await historyStore.aiContext(projectId) });
 });
 
 async function handleExport(req, res) {
@@ -245,4 +295,5 @@ app.use((error, _req, res, _next) => {
 
 app.listen(3100, "127.0.0.1", () => {
   console.log("API listening on http://127.0.0.1:3100");
+  historyStore.startMonitoring();
 });

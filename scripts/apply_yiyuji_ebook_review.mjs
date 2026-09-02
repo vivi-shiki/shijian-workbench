@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { HistoryStore } from "../server/change-history.mjs";
 
 const projectId = process.argv[2] || "yiyuji-four-volumes";
 const target = path.resolve("data", "projects", projectId, "ebook", "structured.json");
 const document = JSON.parse(await fs.readFile(target, "utf8"));
+const originalDocument = structuredClone(document);
+const history = new HistoryStore(path.resolve("data", "projects"));
 if (document.review?.basis === "2026-09-01 user review") {
   console.log(`Review already applied to ${target}`);
   process.exit(0);
@@ -191,5 +194,8 @@ try {
 const temporary = `${target}.tmp`;
 await fs.writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, "utf8");
 await fs.rename(temporary, target);
+await history.recordChange({ projectId, target: { kind: "ebook" }, before: originalDocument, after: document,
+  actor: "ai:codex", source: "codex-review-script", operation: "codex_review",
+  note: "Codex 疑雨集电子书首轮校订" });
 console.log(`Updated ${target}: ${document.entries.length} entries`);
 console.log(`Backup ${backup}`);

@@ -23,14 +23,20 @@ export async function atomicJson(filename, value) {
 }
 
 export class ProjectStore {
-  constructor(root) {
+  constructor(root, history = null) {
     this.root = root;
+    this.history = history;
     this.locks = new Map();
   }
 
   directory(id) { return path.join(this.root, safeId(id)); }
   resultPath(id, resultId) { return path.join(this.directory(id), "results", `${safeId(resultId)}.json`); }
   async json(filename) { return JSON.parse(await fs.readFile(filename, "utf8")); }
+
+  async record(projectId, details) {
+    if (!this.history) return null;
+    return this.history.recordChange({ projectId, ...details });
+  }
 
   async locked(id, operation) {
     const previous = this.locks.get(id) || Promise.resolve();
@@ -66,6 +72,7 @@ export class ProjectStore {
     return this.locked(id, async () => {
       const filename = path.join(this.directory(id), "project.json");
       let project = await this.json(filename);
+      const originalProject = structuredClone(project);
       if (project.schema_version !== 2) {
         const backup = path.join(this.directory(id), "backups", "project-v1.json");
         await fs.mkdir(path.dirname(backup), { recursive: true });
@@ -74,11 +81,15 @@ export class ProjectStore {
         });
         const result = await this.legacyResult(project);
         await atomicJson(this.resultPath(id, result.id), result);
+        await this.record(id, { target: { kind: "result", result_id: result.id }, before: null, after: result,
+          actor: "system", source: "schema-migration", operation: "migrate_result" });
         const { pages, ...metadata } = project;
         project = { ...metadata, schema_version: 2, archived: archive || Boolean(project.archived),
           active_result_id: result.id, results: [this.descriptor(result)] };
       } else if (archive) project.archived = true;
       await atomicJson(filename, project);
+      await this.record(id, { target: { kind: "project" }, before: originalProject, after: project,
+        actor: "system", source: "schema-migration", operation: "migrate_project" });
       return project;
     });
   }
@@ -105,17 +116,19 @@ export class ProjectStore {
       pages: result.pages };
   }
 
-  async save(id, input) {
+  async save(id, input, audit = {}) {
     await this.index(id);
     return this.locked(id, async () => {
       const filename = path.join(this.directory(id), "project.json");
       const project = await this.json(filename);
+      const originalProject = structuredClone(project);
       const selected = input.active_result_id || (project.results.length === 1 ? project.active_result_id : null);
       const target = input.target_result_id || selected;
       if (!project.results.some(r => r.id === selected) || !project.results.some(r => r.id === target)) {
         throw Object.assign(new Error("Explicit valid model result required"), { status: 400 });
       }
       const result = await this.json(this.resultPath(id, selected));
+      const originalResult = structuredClone(result);
       const updates = new Map((input.pages || []).map(page => [page.id, page]));
       for (const [pageId, page] of updates) {
         const old = result.pages.find(p => p.id === pageId);
@@ -129,16 +142,22 @@ export class ProjectStore {
         ? { ...updates.get(page.id), revision: (page.revision || 0) + 1 } : page);
       result.updated_at = new Date().toISOString();
       await atomicJson(this.resultPath(id, selected), result);
+      await this.record(id, { target: { kind: "result", result_id: selected }, before: originalResult, after: result,
+        actor: audit.actor || "human", source: audit.source || "ocr-workbench", operation: "edit_ocr",
+        note: audit.note || "", metadata: audit.metadata || {} });
       project.results = project.results.map(r => r.id === selected ? this.descriptor(result) : r);
       if (typeof input.archived === "boolean") project.archived = input.archived;
       project.active_result_id = target;
       project.updated_at = result.updated_at;
       await atomicJson(filename, project);
+      await this.record(id, { target: { kind: "project" }, before: originalProject, after: project,
+        actor: audit.actor || "human", source: audit.source || "ocr-workbench", operation: "update_project",
+        note: audit.note || "", metadata: audit.metadata || {} });
       return this.view(id, target);
     });
   }
 
-  async importResult(id, input) {
+  async importResult(id, input, audit = {}) {
     if (!input?.result || !Array.isArray(input.result.pages) || typeof input.result.label !== "string") {
       throw Object.assign(new Error("Invalid model result"), { status: 400 });
     }
@@ -160,18 +179,26 @@ export class ProjectStore {
         return project;
       }
       await atomicJson(this.resultPath(id, input.result.id), input.result);
+      await this.record(id, { target: { kind: "result", result_id: input.result.id }, before: null, after: input.result,
+        actor: audit.actor || "ai:ocr", source: audit.source || "ocr-import", operation: "import_result",
+        note: audit.note || "", metadata: audit.metadata || {} });
+      const originalProject = structuredClone(project);
       project.results.push(this.descriptor(input.result));
       await atomicJson(filename, project);
+      await this.record(id, { target: { kind: "project" }, before: originalProject, after: project,
+        actor: audit.actor || "ai:ocr", source: audit.source || "ocr-import", operation: "register_result",
+        note: audit.note || "", metadata: audit.metadata || {} });
       return project;
     });
   }
 
-  async importPage(id, resultId, page) {
+  async importPage(id, resultId, page, audit = {}) {
     return this.locked(id, async () => {
       const filename = path.join(this.directory(id), "project.json");
       const project = await this.json(filename);
       if (!project.results.some(r => r.id === resultId)) throw Object.assign(new Error("Result not found"), { status: 404 });
       const result = await this.json(this.resultPath(id, resultId));
+      const originalResult = structuredClone(result);
       const index = result.pages.findIndex(p => p.id === page.id);
       if (index < 0) throw Object.assign(new Error("Page not found"), { status: 404 });
       // Resuming a batch must never replace a page that is already editable.
@@ -181,8 +208,15 @@ export class ProjectStore {
       result.status = result.completed_pages === result.pages.length ? "complete" : "running";
       result.updated_at = new Date().toISOString();
       await atomicJson(this.resultPath(id, resultId), result);
+      await this.record(id, { target: { kind: "result", result_id: resultId }, before: originalResult, after: result,
+        actor: audit.actor || "ai:ocr", source: audit.source || "ocr-batch", operation: "import_page",
+        note: audit.note || "", metadata: { ...(audit.metadata || {}), page_id: page.id } });
+      const originalProject = structuredClone(project);
       project.results = project.results.map(r => r.id === resultId ? this.descriptor(result) : r);
       await atomicJson(filename, project);
+      await this.record(id, { target: { kind: "project" }, before: originalProject, after: project,
+        actor: audit.actor || "ai:ocr", source: audit.source || "ocr-batch", operation: "update_result_progress",
+        note: audit.note || "", metadata: { ...(audit.metadata || {}), page_id: page.id } });
       return { completed_pages: result.completed_pages, status: result.status };
     });
   }

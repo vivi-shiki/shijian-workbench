@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project-id", default="yiyuji-four-volumes")
+    parser.add_argument("--project-id", required=True)
     parser.add_argument("--allow-pending", action="store_true")
     args = parser.parse_args()
     directory = ROOT / "data/projects" / args.project_id

@@ -12,6 +12,7 @@ import {
   Download,
   FileJson,
   FolderOpen,
+  History,
   Layers,
   PanelLeftClose,
   Plus,
@@ -21,6 +22,7 @@ import {
   Trash2
 } from "lucide-react";
 import EbookWorkspace from "./EbookWorkspace.jsx";
+import HistoryWorkspace from "./HistoryWorkspace.jsx";
 import "./styles.css";
 
 const STATUS_LABELS = {
@@ -164,7 +166,8 @@ function App() {
   const [zoom, setZoom] = React.useState(0.42);
   const [filter, setFilter] = React.useState("all");
   const [stage, setStage] = React.useState(() => {
-    return new URLSearchParams(window.location.search).get("stage") === "ebook" ? "ebook" : "ocr";
+    const requested = new URLSearchParams(window.location.search).get("stage");
+    return ["ebook", "history"].includes(requested) ? requested : "ocr";
   });
   const dirtyPages = React.useRef(new Set());
   const busyRef = React.useRef(false);
@@ -283,7 +286,11 @@ function App() {
   async function persistCurrent(extra = {}) {
       const response = await fetch(`/api/project/${project.id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Oldbook-Actor": "human",
+          "X-Oldbook-Source": "ocr-workbench"
+        },
         body: JSON.stringify({
           active_result_id: project.active_result_id,
           pages: project.pages.filter(page => dirtyPages.current.has(page.id)),
@@ -433,7 +440,7 @@ function App() {
     }
     setStage(nextStage);
     const url = new URL(window.location.href);
-    if (nextStage === "ebook") url.searchParams.set("stage", "ebook");
+    if (nextStage !== "ocr") url.searchParams.set("stage", nextStage);
     else url.searchParams.delete("stage");
     window.history.replaceState(null, "", url);
   }
@@ -453,7 +460,7 @@ function App() {
   }
 
   return (
-    <div className={`${stage === "ocr" ? "app-shell" : "ebook-shell"} ${saving ? "is-saving" : ""}`}>
+    <div className={`${stage === "ocr" ? "app-shell" : stage === "ebook" ? "ebook-shell" : "history-shell"} ${saving ? "is-saving" : ""}`}>
       <header className="topbar">
         <div className="project-heading">
           <h1>{project.title}</h1>
@@ -467,7 +474,7 @@ function App() {
                 </option>
               ))}
             </select>
-          </label> : <p>将双 OCR 校对稿整理为可编辑的诗词电子文本</p>}
+          </label> : <p>{stage === "ebook" ? "将多模型 OCR 校对稿整理为可编辑的诗歌类古籍电子文本" : "审阅人工与 AI 修改，并维护项目经验摘要"}</p>}
           <p>
             {stage === "ocr" ? `${summary.pages} 页 / ${summary.regions} 个文字框 / ${summary.reviewed} 个已校` : `${summary.pages} 页 / ${project.results?.length || 1} 套 OCR 结果`}
           </p>
@@ -477,7 +484,10 @@ function App() {
             <span>1</span><Layers size={16} /><b>双 OCR 与校对</b>
           </button>
           <button type="button" role="tab" aria-selected={stage === "ebook"} onClick={() => selectStage("ebook")}>
-            <span>2</span><BookType size={16} /><b>诗词结构化</b>
+            <span>2</span><BookType size={16} /><b>诗歌古籍结构化</b>
+          </button>
+          <button type="button" role="tab" aria-selected={stage === "history"} onClick={() => selectStage("history")}>
+            <span>3</span><History size={16} /><b>修改记录</b>
           </button>
         </nav>
         <div className="top-actions">
@@ -514,7 +524,8 @@ function App() {
       </header>
       {error && <div className="save-error" role="alert">{error}</div>}
 
-      {stage === "ebook" ? <EbookWorkspace key={project.id} project={project} /> : <>
+      {stage === "ebook" ? <EbookWorkspace key={project.id} project={project} />
+        : stage === "history" ? <HistoryWorkspace key={project.id} project={project} /> : <>
       <aside className="page-rail">
         <div className="rail-header">
           <PanelLeftClose size={16} />
@@ -666,7 +677,7 @@ function ProjectSwitcher({ projects, currentProjectId, onSelect, disabled }) {
         disabled={disabled}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        title="切换测试项目"
+        title="切换项目"
       >
         <FolderOpen size={16} />
         <span>

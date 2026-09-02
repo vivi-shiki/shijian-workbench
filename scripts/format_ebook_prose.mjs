@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { HistoryStore } from "../server/change-history.mjs";
 import { buildClassicalProsePrompt } from "../server/classical-prose-prompt.mjs";
 import { projectFormatting, textSignature } from "../server/text-formatting.mjs";
 
-const projectId = process.argv[2] || "yiyuji-four-volumes";
+const projectId = process.argv[2];
+if (!projectId) throw new Error("Usage: node scripts/format_ebook_prose.mjs <project-id> [--kinds=preface,biography]");
 const kindsArgument = process.argv.find(argument => argument.startsWith("--kinds="));
 const selectedKinds = new Set(
   (kindsArgument?.slice("--kinds=".length) || "preface,biography")
@@ -21,6 +23,9 @@ const apiKey = process.env.SILICONFLOW_API_KEY;
 const baseUrl = (process.env.SILICONFLOW_BASE_URL || "https://api.siliconflow.cn/v1").replace(/\/$/, "");
 const model = process.env.SILICONFLOW_MODEL || "deepseek-ai/DeepSeek-V3.2";
 const filename = path.join(root, "data", "projects", projectId, "ebook", "structured.json");
+const history = new HistoryStore(path.join(root, "data", "projects"));
+const learningContext = await history.aiContext(projectId);
+let runRecord;
 
 if (!apiKey) throw new Error("SILICONFLOW_API_KEY is not configured");
 
@@ -36,15 +41,16 @@ function parseJson(content) {
 }
 
 async function request(entry) {
+  const messages = [
+    { role: "system", content: "你是古籍整理与文言句读专家。只做标点和分段，不改变原文文字。" },
+    { role: "user", content: `${buildClassicalProsePrompt(entry)}${learningContext ? `\n\n项目既有校订经验如下，只作一致性提示，不得改变当前原文：\n${learningContext}` : ""}` }
+  ];
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model,
-      messages: [
-        { role: "system", content: "你是古籍整理与文言句读专家。只做标点和分段，不改变原文文字。" },
-        { role: "user", content: buildClassicalProsePrompt(entry) }
-      ],
+      messages,
       temperature: 0,
       max_tokens: 8192,
       enable_thinking: false,
@@ -54,7 +60,12 @@ async function request(entry) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error?.message || body.message || `HTTP ${response.status}`);
-  return parseJson(body.choices?.[0]?.message?.content);
+  const parsed = parseJson(body.choices?.[0]?.message?.content);
+  if (runRecord) await history.recordRunStep(projectId, runRecord.id, {
+    kind: "prose-entry", entry_id: entry.id,
+    request: { model, messages }, response: { content: body.choices?.[0]?.message?.content, parsed, usage: body.usage || null }
+  });
+  return parsed;
 }
 
 async function formatEntry(entry) {
@@ -81,12 +92,17 @@ async function formatEntry(entry) {
 }
 
 const document = JSON.parse(await fs.readFile(filename, "utf8"));
+const originalDocument = structuredClone(document);
 const entries = document.entries.filter(
   entry => selectedKinds.has(entry.kind) && String(entry.prose || "").trim()
 );
 if (!entries.length) {
   throw new Error(`No prose entries found for kinds: ${[...selectedKinds].join(", ")}`);
 }
+runRecord = await history.startRun(projectId, {
+  actor: "ai:siliconflow", source: "deepseek-prose-format", provider: "siliconflow", model,
+  options: { kinds: [...selectedKinds] }, input: { document: originalDocument, learning_context: learningContext }
+});
 const source = new Map(entries.map(entry => [entry.id, entry.prose]));
 const report = [];
 
@@ -104,5 +120,10 @@ const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const backup = path.join(path.dirname(filename), `structured.before-prose-format.${timestamp}.json`);
 await fs.writeFile(backup, `${JSON.stringify(JSON.parse(await fs.readFile(filename, "utf8")), null, 2)}\n`, "utf8");
 await fs.writeFile(filename, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+await history.recordChange({ projectId, target: { kind: "ebook" }, before: originalDocument, after: document,
+  actor: "ai:siliconflow", source: "deepseek-prose-format", operation: "ai_prose_format",
+  note: `DeepSeek 散文句读：${[...selectedKinds].join(", ")}`, runId: runRecord.id,
+  metadata: { model, entries: entries.length } });
+await history.finishRun(projectId, runRecord.id, { status: "complete", output: document });
 
 console.log(JSON.stringify({ projectId, kinds: [...selectedKinds], model, report, backup }, null, 2));

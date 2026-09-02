@@ -1,6 +1,8 @@
 param(
-  [string]$InputPdf = "data/input/yiyuji-source.pdf",
-  [string]$OutputDir = "data/projects/yiyuji/pages",
+  [Parameter(Mandatory = $true)]
+  [string]$InputPdf,
+  [Parameter(Mandatory = $true)]
+  [string]$OutputDir,
   [int]$FirstPage = 1,
   [int]$LastPage = 20,
   [int]$Dpi = 144

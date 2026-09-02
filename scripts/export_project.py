@@ -78,7 +78,7 @@ def export_html(project: dict[str, Any], mode: str) -> str:
 
 def main() -> None:
   parser = argparse.ArgumentParser()
-  parser.add_argument("--project-id", default="yiyuji-photos")
+  parser.add_argument("--project-id", required=True)
   parser.add_argument("--mode", choices=["raw", "edited", "reading"], default="edited")
   parser.add_argument("--result-id", default=None)
   args = parser.parse_args()

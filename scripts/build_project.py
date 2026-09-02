@@ -623,7 +623,6 @@ def build_project(
   project_dir.mkdir(parents=True, exist_ok=True)
   pages_project_id = pages_project_id or project_id
   ocr_project_id = ocr_project_id or pages_project_id
-  is_photo_project = pages_project_id == "yiyuji-photos"
   pages_dir = ROOT / "data" / "projects" / pages_project_id / "pages"
   ocr_dir_names = {
     "ndlkoten": "ndlkoten",
@@ -690,7 +689,7 @@ def build_project(
       "ocr_project_id": ocr_project_id
     },
     "workflow": {
-      "import": "Phone photos normalized into upright page images." if is_photo_project else "PDF rendered to PNG pages with Poppler.",
+      "import": source_note,
       "ocr_provider": {
         "paddlevl": "paddleocr-vl-1.6",
         "openaivl": "openai-compatible-paddleocr-vl",
@@ -727,7 +726,7 @@ def build_project(
 
 def main() -> None:
   parser = argparse.ArgumentParser()
-  parser.add_argument("--project-id", default="yiyuji")
+  parser.add_argument("--project-id", required=True)
   parser.add_argument("--pages-project-id", default=None)
   parser.add_argument("--ocr-project-id", default=None)
   parser.add_argument("--ocr-dir-name", default=None)
@@ -740,16 +739,10 @@ def main() -> None:
   parser.add_argument("--no-preserve-edits", action="store_true")
   parser.add_argument("--result-id", default=None)
   args = parser.parse_args()
-  title = args.title or ("疑雨集註 手机照片测试" if args.project_id == "yiyuji-photos" else "疑雨集註 MVP 样本")
-  source_note = args.source_note or (
-    "Six phone photos were manually rotated into upright page images."
-    if args.project_id == "yiyuji-photos"
-    else "MVP uses the first rendered pages as a working sample."
-  )
+  title = args.title or args.project_id
+  source_note = args.source_note or "OCR pages imported into the editable document workbench."
   source_path = Path(args.source_path) if args.source_path else None
-  if not source_path and args.project_id == "yiyuji":
-    source_path = ROOT / "data" / "input" / "yiyuji-source.pdf"
-  total_pages = args.total_pages or (110 if args.project_id == "yiyuji" else None)
+  total_pages = args.total_pages
   project = build_project(
     project_id=args.project_id,
     title=title,

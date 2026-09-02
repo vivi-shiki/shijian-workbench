@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, validateEbook } from "./ebook-store.mjs";
+import { buildEbookPrompt, emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, validateEbook } from "./ebook-store.mjs";
 
 const project = { id: "book", title: "Book", results: [{ page_count: 30 }] };
 
 test("model JSON parser accepts fenced and surrounding content", () => {
   assert.deepEqual(parseModelJson("```json\n{\"entries\":[],\"issues\":[]}\n```"), { entries: [], issues: [] });
   assert.deepEqual(parseModelJson("回答如下：{\"entries\":[],\"issues\":[]}"), { entries: [], issues: [] });
+});
+
+test("ebook prompt uses the current title and supports broad poetry genres", () => {
+  const prompt = buildEbookPrompt("詞稿測試", [], []);
+  assert.match(prompt, /詞稿測試/);
+  assert.match(prompt, /古体诗、乐府、词、曲、联句/);
+  assert.doesNotMatch(prompt, /疑雨集注/);
 });
 
 test("generated entries are normalized and can continue the previous chunk", () => {
