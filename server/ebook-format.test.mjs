@@ -7,6 +7,7 @@ import {
   displayedNoteText,
   displayedSeriesTitle,
   poemParagraphs,
+  proseParagraphs,
   seriesOrdinal
 } from "../src/ebook-format.js";
 
@@ -56,4 +57,9 @@ test("notes use literal circled-number characters and display terminal punctuati
   assert.equal(circledNumber(21), "㉑");
   assert.equal(displayedNoteText("庾信詩洞房花燭明"), "庾信詩洞房花燭明。");
   assert.equal(displayedNoteText("原注已具。"), "原注已具。");
+  assert.equal(displayedNoteText("庾信詩：“洞房花燭明。”"), "庾信詩：“洞房花燭明。”");
+});
+
+test("classical prose blank lines become semantic display paragraphs", () => {
+  assert.deepEqual(proseParagraphs("第一段。\n\n第二段。\n\n\n第三段。"), ["第一段。", "第二段。", "第三段。"]);
 });

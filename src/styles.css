@@ -1071,7 +1071,8 @@ button:disabled { cursor: default; opacity: .65; }
 .ebook-entry > p { margin: 6px 0; }
 .entry-byline { color: #746b5e; font-size: 12px; }
 .poem-lines p { margin: 5px 0; font-size: 17px; line-height: 1.8; letter-spacing: 0; }
-.entry-prose { font-size: 16px; line-height: 1.9; white-space: pre-wrap; }
+.entry-prose { font-size: 16px; line-height: 1.9; text-align: left; }
+.entry-prose p { margin: 0 0 0.9em; text-indent: 2em; }
 .entry-notes { margin-top: 14px; color: #655d53; font-size: 13px; line-height: 1.7; text-align: left; }
 .entry-notes h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; text-align: center; }
 .entry-notes p { margin: 4px 0; text-indent: 2em; }

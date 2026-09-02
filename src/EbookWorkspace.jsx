@@ -17,6 +17,7 @@ import {
   displayedNoteText,
   displayedSeriesTitle,
   poemParagraphs,
+  proseParagraphs,
   seriesOrdinal
 } from "./ebook-format.js";
 
@@ -346,7 +347,9 @@ function EbookPreview({ document, selectedEntryId, onSelect }) {
               <AnnotatedText key={`${entry.id}-line-${item.line}`} text={item.text} notes={entry.notes} field="lines" line={item.line} />
             ))}</p>
           ))}</div>}
-          {entry.prose && <p className="entry-prose">{entry.prose}</p>}
+          {entry.prose && <div className="entry-prose">{proseParagraphs(entry.prose).map((paragraph, index) => (
+            <p key={`${entry.id}-prose-${index}`}>{paragraph}</p>
+          ))}</div>}
           {entry.notes?.length > 0 && <aside className="entry-notes" aria-label="注释">
             <h4>注释</h4>
             {entry.notes.map((note, index) => (

@@ -47,6 +47,7 @@ Thumbs.db
 Desktop.ini
 
 # Source documents are local inputs and can be very large.
+*.docx
 /data/input/*
 !/data/input/.gitkeep
 

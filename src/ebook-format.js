@@ -31,7 +31,11 @@ export function circledNumber(value) {
 
 export function displayedNoteText(text) {
   const value = String(text || "").trim();
-  return value && !/[。！？!?…]$/.test(value) ? `${value}。` : value;
+  return value && !/[。！？!?…][”’」』》）】]?$/.test(value) ? `${value}。` : value;
+}
+
+export function proseParagraphs(prose) {
+  return String(prose || "").split(/\n\s*\n/).map(value => value.trim()).filter(Boolean);
 }
 
 export function poemParagraphs(lines, form) {
