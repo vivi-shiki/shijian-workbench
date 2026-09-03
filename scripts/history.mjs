@@ -41,9 +41,41 @@ if (command === "begin") {
   const result = await history.bootstrapProject(projectId);
   console.log(JSON.stringify({ ok: true, command, project_id: projectId, total: result.total,
     totals: result.overview.totals }, null, 2));
+} else if (command === "seal") {
+  const result = await history.reseal(projectId);
+  console.log(JSON.stringify({ ok: true, command, project_id: projectId, ...result }, null, 2));
 } else if (command === "show") {
   const result = await history.read(projectId, Number(argument("limit", "20")));
-  console.log(JSON.stringify(result, null, 2));
+  const output = argumentsList.includes("--full") ? result : {
+    total: result.total,
+    integrity: result.integrity,
+    overview: {
+      totals: result.overview.totals,
+      by_actor: result.overview.by_actor,
+      by_source: result.overview.by_source,
+      frequent_fields: Object.fromEntries(Object.entries(result.overview.by_field).sort((a, b) => b[1] - a[1]).slice(0, 12)),
+      repeated_patterns: result.overview.patterns.filter(item => item.count >= 2).slice(0, 12),
+      cases: result.overview.cases.slice(0, 6)
+    },
+    events: result.events.map(event => ({
+      id: event.id,
+      timestamp: event.timestamp,
+      actor: event.actor,
+      source: event.source,
+      operation: event.operation,
+      target: event.target,
+      note: event.note,
+      run_id: event.run_id,
+      summary: {
+        operations: event.summary.operations,
+        text_changes: event.summary.text_changes,
+        fields: Object.fromEntries(Object.entries(event.summary.fields).sort((a, b) => b[1] - a[1]).slice(0, 12)),
+        pages: event.summary.pages.length,
+        entities: event.summary.entities.length
+      }
+    }))
+  };
+  console.log(JSON.stringify(output, null, 2));
 } else {
-  throw new Error("Usage: node scripts/history.mjs <bootstrap|begin|commit|reconcile|show> --project <id>");
+  throw new Error("Usage: node scripts/history.mjs <bootstrap|begin|commit|reconcile|seal|show> --project <id>");
 }

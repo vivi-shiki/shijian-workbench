@@ -90,7 +90,8 @@ export function diffJson(before, after, currentPath = "") {
 
 function pathDetails(pointer) {
   const parts = pointer.split("/").slice(1).map(part => part.replaceAll("~1", "/").replaceAll("~0", "~"));
-  const detail = { field: parts.at(-1) || "root" };
+  const field = [...parts].reverse().find(part => !/^\d+$/.test(part)) || "root";
+  const detail = { field };
   for (const [container, key] of [["pages", "page_id"], ["regions", "region_id"], ["entries", "entry_id"], ["issues", "issue_id"]]) {
     const index = parts.indexOf(container);
     if (index >= 0 && parts[index + 1]) detail[key] = parts[index + 1];
@@ -208,6 +209,10 @@ function updateOverview(overview, event) {
   increment(overview.by_source, event.source);
   for (const [field, count] of Object.entries(event.summary.fields)) increment(overview.by_field, field, count);
 
+  const learningEligible = event.operation !== "legacy_reconstruction" ||
+    ["deepseek-note-punctuation", "deepseek-prose-format"].includes(event.source);
+  if (!learningEligible) return overview;
+
   const patterns = new Map(overview.patterns.map(item => [`${item.from}\u0000${item.to}`, item]));
   const additions = [];
   for (const change of event.changes) {
@@ -302,6 +307,7 @@ export class HistoryStore {
   projectDirectory(projectId) { return path.join(this.projectsRoot, safePart(projectId)); }
   historyDirectory(projectId) { return path.join(this.projectDirectory(projectId), "history"); }
   eventsPath(projectId) { return path.join(this.historyDirectory(projectId), "events.jsonl"); }
+  ledgerPath(projectId) { return path.join(this.historyDirectory(projectId), "ledger.json"); }
   overviewPath(projectId) { return path.join(this.projectDirectory(projectId), "ai-memory", "overview.json"); }
   memoryPath(projectId) { return path.join(this.projectDirectory(projectId), "ai-memory", "AI_CONTEXT.md"); }
   statePath(projectId, target) { return path.join(this.historyDirectory(projectId), "state", `${targetKey(target)}.json`); }
@@ -323,7 +329,16 @@ export class HistoryStore {
 
   async appendEventUnlocked(projectId, event) {
     await fs.mkdir(this.historyDirectory(projectId), { recursive: true });
+    const ledger = await this.readJson(this.ledgerPath(projectId), { schema_version: SCHEMA_VERSION, events: 0, last_event_hash: null });
+    event.previous_event_hash = ledger.last_event_hash;
+    event.event_hash = hashJson(event);
     await fs.appendFile(this.eventsPath(projectId), `${JSON.stringify(event)}\n`, "utf8");
+    await atomicJson(this.ledgerPath(projectId), {
+      schema_version: SCHEMA_VERSION,
+      events: ledger.events + 1,
+      last_event_hash: event.event_hash,
+      updated_at: event.timestamp
+    });
     const overview = await this.readJson(this.overviewPath(projectId), emptyOverview(projectId));
     updateOverview(overview, event);
     await atomicJson(this.overviewPath(projectId), overview);
@@ -349,11 +364,11 @@ export class HistoryStore {
     });
   }
 
-  async recordChange({ projectId, target, before, after, actor = "external", source = "unknown", operation = "update", note = "", runId = null, metadata = {} }) {
+  async recordChange({ projectId, target, before, after, actor = "external", source = "unknown", operation = "update", note = "", runId = null, metadata = {}, updateState = true }) {
     return this.locked(projectId, async () => {
       const changes = diffJson(before, after);
       if (!changes.length) {
-        await atomicJson(this.statePath(projectId, target), after);
+        if (updateState) await atomicJson(this.statePath(projectId, target), after);
         return null;
       }
       const timestamp = isoNow();
@@ -370,7 +385,7 @@ export class HistoryStore {
         summary: summarizeChanges(changes), changes
       };
       await this.appendEventUnlocked(projectId, event);
-      await atomicJson(this.statePath(projectId, target), after);
+      if (updateState) await atomicJson(this.statePath(projectId, target), after);
       return event;
     });
   }
@@ -475,10 +490,21 @@ export class HistoryStore {
     const events = content.split(/\r?\n/).filter(Boolean).flatMap(line => {
       try { return [JSON.parse(line)]; } catch { return []; }
     });
+    let previousHash = null;
+    let integrityError = "";
+    for (const event of events) {
+      const { event_hash: claimedHash, ...unsigned } = event;
+      if (event.previous_event_hash !== previousHash || hashJson(unsigned) !== claimedHash) {
+        integrityError = `事件链在 ${event.id || "未知事件"} 处不一致`;
+        break;
+      }
+      previousHash = claimedHash;
+    }
     const requested = Math.max(1, Math.min(500, Number(limit) || DEFAULT_LIMIT));
     return {
       events: events.slice(-requested).reverse(),
       total: events.length,
+      integrity: { valid: !integrityError, checked: events.length, error: integrityError },
       overview: await this.readJson(this.overviewPath(projectId), emptyOverview(projectId))
     };
   }
@@ -490,6 +516,49 @@ export class HistoryStore {
       throw error;
     });
     return content.slice(0, maximumCharacters);
+  }
+
+  async rebuildOverview(projectId) {
+    const content = await fs.readFile(this.eventsPath(projectId), "utf8").catch(() => "");
+    const overview = emptyOverview(projectId);
+    for (const line of content.split(/\r?\n/).filter(Boolean)) {
+      try {
+        const event = JSON.parse(line);
+        event.summary = summarizeChanges(event.changes || []);
+        updateOverview(overview, event);
+      } catch {
+        // Integrity reporting handles malformed event lines; keep the derived view rebuildable.
+      }
+    }
+    await atomicJson(this.overviewPath(projectId), overview);
+    await fs.mkdir(path.dirname(this.memoryPath(projectId)), { recursive: true });
+    await fs.writeFile(this.memoryPath(projectId), renderMemory(overview), "utf8");
+    return overview;
+  }
+
+  async reseal(projectId) {
+    return this.locked(projectId, async () => {
+      const lines = (await fs.readFile(this.eventsPath(projectId), "utf8")).split(/\r?\n/).filter(Boolean);
+      let previousHash = null;
+      const events = lines.map(line => {
+        const event = JSON.parse(line);
+        delete event.event_hash;
+        event.previous_event_hash = previousHash;
+        event.event_hash = hashJson(event);
+        previousHash = event.event_hash;
+        return event;
+      });
+      const temporary = `${this.eventsPath(projectId)}.${process.pid}.${crypto.randomUUID()}.tmp`;
+      await fs.writeFile(temporary, `${events.map(event => JSON.stringify(event)).join("\n")}\n`, "utf8");
+      await fs.rename(temporary, this.eventsPath(projectId));
+      await atomicJson(this.ledgerPath(projectId), {
+        schema_version: SCHEMA_VERSION,
+        events: events.length,
+        last_event_hash: previousHash,
+        updated_at: isoNow()
+      });
+      return { events: events.length, last_event_hash: previousHash };
+    });
   }
 
   async startRun(projectId, details = {}) {
@@ -505,7 +574,9 @@ export class HistoryStore {
       provider: details.provider || null,
       options: details.options || {},
       note: details.note || "",
-      steps: 0
+      steps: 0,
+      artifacts: [],
+      ...(details.input !== undefined ? { input_hash: hashJson(details.input) } : {})
     };
     await atomicJson(path.join(directory, "manifest.json"), manifest);
     if (details.input !== undefined) await atomicJson(path.join(directory, "input.json"), details.input);
@@ -520,7 +591,9 @@ export class HistoryStore {
     manifest.steps += 1;
     manifest.updated_at = isoNow();
     const filename = `${String(manifest.steps).padStart(4, "0")}-${safePart(step.kind || "step")}.json`;
-    await atomicJson(path.join(directory, "steps", filename), { ...step, recorded_at: manifest.updated_at });
+    const artifact = { ...step, recorded_at: manifest.updated_at };
+    await atomicJson(path.join(directory, "steps", filename), artifact);
+    manifest.artifacts.push({ path: `steps/${filename}`, sha256: hashJson(artifact) });
     await atomicJson(manifestPath, manifest);
     return manifest.steps;
   }
@@ -533,6 +606,7 @@ export class HistoryStore {
     Object.assign(manifest, {
       status: details.status || "complete",
       completed_at: isoNow(),
+      ...(details.output !== undefined ? { output_hash: hashJson(details.output) } : {}),
       ...(details.error ? { error: details.error } : {})
     });
     await atomicJson(manifestPath, manifest);
@@ -542,34 +616,46 @@ export class HistoryStore {
 
   async bootstrapProject(projectId) {
     const ebookTarget = { kind: "ebook" };
-    const ebookState = await this.readJson(this.statePath(projectId, ebookTarget), null);
-    if (ebookState == null) {
-      const ebookDirectory = path.join(this.projectDirectory(projectId), "ebook");
-      const candidates = [];
-      for (const directory of [ebookDirectory, path.join(ebookDirectory, "backups")]) {
-        for (const entry of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
-          if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === "structured.json") continue;
-          const filename = path.join(directory, entry.name);
-          const stat = await fs.stat(filename);
-          candidates.push({ filename, name: entry.name, mtime: stat.mtimeMs });
-        }
-      }
-      candidates.sort((a, b) => a.mtime - b.mtime);
-      const currentFilename = path.join(ebookDirectory, "structured.json");
-      if (await fs.stat(currentFilename).catch(() => null)) candidates.push({ filename: currentFilename, name: "structured.json", mtime: Infinity });
-      if (candidates.length) {
-        let previous = JSON.parse(await fs.readFile(candidates[0].filename, "utf8"));
-        await this.baseline(projectId, ebookTarget, previous, `由旧快照 ${candidates[0].name} 建立基线`);
-        for (let index = 1; index < candidates.length; index += 1) {
-          const current = JSON.parse(await fs.readFile(candidates[index].filename, "utf8"));
-          const inferred = inferSnapshotSource(candidates[index - 1].name);
-          await this.recordChange({ projectId, target: ebookTarget, before: previous, after: current,
-            ...inferred, operation: "legacy_reconstruction", metadata: { from: candidates[index - 1].name, to: candidates[index].name } });
-          previous = current;
-        }
+    const ebookDirectory = path.join(this.projectDirectory(projectId), "ebook");
+    const candidates = [];
+    for (const directory of [ebookDirectory, path.join(ebookDirectory, "backups")]) {
+      for (const entry of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
+        if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === "structured.json") continue;
+        const filename = path.join(directory, entry.name);
+        const stat = await fs.stat(filename);
+        candidates.push({ filename, name: entry.name, mtime: stat.mtimeMs });
       }
     }
+    candidates.sort((a, b) => a.mtime - b.mtime);
+    const currentFilename = path.join(ebookDirectory, "structured.json");
+    if (await fs.stat(currentFilename).catch(() => null)) {
+      candidates.push({ filename: currentFilename, name: "structured.json", mtime: Infinity });
+    }
+
+    const ebookState = await this.readJson(this.statePath(projectId, ebookTarget), null);
+    if (ebookState == null && candidates.length) {
+      const first = JSON.parse(await fs.readFile(candidates[0].filename, "utf8"));
+      await this.baseline(projectId, ebookTarget, first, `由旧快照 ${candidates[0].name} 建立基线`);
+    }
+
+    const existingEvents = await fs.readFile(this.eventsPath(projectId), "utf8").catch(() => "");
+    if (!existingEvents.includes('"operation":"legacy_reconstruction"') && candidates.length > 1) {
+      let previous = JSON.parse(await fs.readFile(candidates[0].filename, "utf8"));
+      for (let index = 1; index < candidates.length; index += 1) {
+        const current = JSON.parse(await fs.readFile(candidates[index].filename, "utf8"));
+        const inferred = candidates[index].name === "structured.json"
+          ? { actor: "external", source: "legacy-current-gap", note: "旧快照到当前文件之间可能包含多次操作，无法可靠归因" }
+          : inferSnapshotSource(candidates[index - 1].name);
+        await this.recordChange({ projectId, target: ebookTarget, before: previous, after: current,
+          ...inferred, operation: "legacy_reconstruction", updateState: false,
+          metadata: { from: candidates[index - 1].name, to: candidates[index].name,
+            reconstructed_at: isoNow(), source_mtime: candidates[index].mtime } });
+        previous = current;
+      }
+      if (ebookState == null) await atomicJson(this.statePath(projectId, ebookTarget), previous);
+    }
     await this.reconcileProject(projectId);
+    await this.rebuildOverview(projectId);
     return this.read(projectId, 20);
   }
 }

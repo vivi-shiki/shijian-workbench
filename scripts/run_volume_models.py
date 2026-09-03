@@ -32,7 +32,8 @@ def write_json(filename, value):
 def api(base, method, endpoint, payload):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(base + endpoint, data=data,
-        headers={"Content-Type": "application/json"}, method=method)
+        headers={"Content-Type": "application/json", "X-Oldbook-Actor": "ai:ocr",
+                 "X-Oldbook-Source": "volume-ocr-batch"}, method=method)
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.load(response)
 

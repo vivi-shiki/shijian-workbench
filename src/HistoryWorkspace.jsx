@@ -83,7 +83,7 @@ export default function HistoryWorkspace({ project }) {
     <main className="history-workspace">
       <header className="history-toolbar">
         <div><History size={18} /><span>可追溯记录</span><strong>{data?.total || 0}</strong></div>
-        <p>事件流水保留事实；右侧经验摘要由流水自动生成，供 Codex 与目标模型参考。</p>
+        <p>事件流水保留事实；右侧经验摘要由流水自动生成，供 Codex 与目标模型参考。{data?.integrity?.valid ? "事件链校验通过。" : "事件链校验异常。"}</p>
         <button className="icon-button" onClick={load} disabled={loading} title="刷新修改记录">
           <RefreshCw className={loading ? "spin" : ""} size={16} />
         </button>

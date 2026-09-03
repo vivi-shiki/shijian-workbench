@@ -716,7 +716,8 @@ def build_project(
       "archived": not bool(model), "status": "complete", "completed_pages": len(pages), "created_at": now_iso()}
     payload = json.dumps({"title": title, "source": project["source"], "result": result}, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(f"http://127.0.0.1:3100/api/projects/{project_id}/results", data=payload,
-      headers={"Content-Type": "application/json"}, method="POST")
+      headers={"Content-Type": "application/json", "X-Oldbook-Actor": "ai:ocr",
+               "X-Oldbook-Source": "project-builder"}, method="POST")
     with urllib.request.urlopen(request, timeout=120) as response:
       response.read()
   else:

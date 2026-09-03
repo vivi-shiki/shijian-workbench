@@ -47,7 +47,47 @@ SILICONFLOW_MAX_TOKENS=8192
 GET  /api/projects/:projectId/ebook
 PUT  /api/projects/:projectId/ebook
 POST /api/projects/:projectId/ebook/run
+GET  /api/projects/:projectId/history
+GET  /api/projects/:projectId/ai-memory
 ```
+
+## 修改记录与 AI 经验
+
+工作台把人工校对、Codex 直接修改和硅基流动模型运行统一记录在项目目录中：
+
+```text
+data/projects/<project-id>/
+  history/events.jsonl                 # 逐字段 before/after 事件流水，带 SHA-256 哈希链
+  history/ledger.json                  # 事件链末端与数量
+  history/state/*.json                 # 外部修改检测基线，仅用于比较
+  history/runs/<run-id>/manifest.json  # AI 运行模型、参数、状态和输入输出哈希
+  history/runs/<run-id>/steps/*.json   # 每批实际提示词、模型原始响应和 usage
+  history/runs/<run-id>/input.json
+  history/runs/<run-id>/output.json
+  ai-memory/overview.json              # 从事件流水自动汇总的统计、模式和短案例
+  ai-memory/AI_CONTEXT.md              # 给 Codex 和目标模型读取的紧凑上下文
+```
+
+浏览器保存会自动标为 `human`；DeepSeek 结构化、注文标点和散文句读会标为
+`ai:siliconflow`，并保留完整 run 档案。API 服务每 3 秒检查受管 JSON，绕过接口的改动也会补记；没有主动声明身份时只标为 `external`，不猜测是谁修改。
+
+Codex 直接改项目 JSON 时按仓库根目录 `AGENTS.md` 执行：
+
+```powershell
+node scripts/history.mjs begin --project yiyuji-four-volumes --actor ai:codex --source codex-direct-edit --note "本次修改目的"
+# 修改 JSON
+node scripts/history.mjs commit --project yiyuji-four-volumes
+```
+
+已有旧备份可一次性重建目前能确认的历史。无法从文件证据可靠判断的时间段会明确标为
+`legacy-current-gap`，不会冒充人工或 AI 记录：
+
+```powershell
+npm run history:bootstrap -- --project yiyuji-four-volumes
+npm run history:show -- --project yiyuji-four-volumes --limit 10
+```
+
+经验摘要不是自动纠错表。DeepSeek 提示词会读取它，但仍以当前页原图和明确人工校订为最高证据；AI 自己产生的历史修改保留来源标签，不能当成人工定论。`data/projects/` 仍属于本地项目数据并被 Git 忽略，备份时应连同整个项目目录保存。
 
 ## 项目归档与多模型结果
 

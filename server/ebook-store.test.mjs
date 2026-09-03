@@ -10,9 +10,11 @@ test("model JSON parser accepts fenced and surrounding content", () => {
 });
 
 test("ebook prompt uses the current title and supports broad poetry genres", () => {
-  const prompt = buildEbookPrompt("詞稿測試", [], []);
+  const prompt = buildEbookPrompt("詞稿測試", [], [], "人工曾将『雨集』校为『疑雨集』");
   assert.match(prompt, /詞稿測試/);
   assert.match(prompt, /古体诗、乐府、词、曲、联句/);
+  assert.match(prompt, /人工曾将『雨集』校为『疑雨集』/);
+  assert.match(prompt, /不得机械套用/);
   assert.doesNotMatch(prompt, /疑雨集注/);
 });
 

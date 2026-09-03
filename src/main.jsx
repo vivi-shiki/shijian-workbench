@@ -481,10 +481,10 @@ function App() {
         </div>
         <nav className="workflow-tabs" role="tablist" aria-label="电子书制作流程">
           <button type="button" role="tab" aria-selected={stage === "ocr"} onClick={() => selectStage("ocr")}>
-            <span>1</span><Layers size={16} /><b>双 OCR 与校对</b>
+            <span>1</span><Layers size={16} /><b>OCR 校对</b>
           </button>
           <button type="button" role="tab" aria-selected={stage === "ebook"} onClick={() => selectStage("ebook")}>
-            <span>2</span><BookType size={16} /><b>诗歌古籍结构化</b>
+            <span>2</span><BookType size={16} /><b>诗歌结构</b>
           </button>
           <button type="button" role="tab" aria-selected={stage === "history"} onClick={() => selectStage("history")}>
             <span>3</span><History size={16} /><b>修改记录</b>
