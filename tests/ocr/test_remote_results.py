@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.error import URLError
 from io import BytesIO
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "ocr"))
 from build_project import convert_regions_remote_paddlevl
 from run_remote_paddlevl import post_ocr
 from run_volume_models import write_json

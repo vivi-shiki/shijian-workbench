@@ -1,5 +1,5 @@
 const CHINESE_DIGITS = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
-const REGULATED_VERSE = /(绝句|絕句|律诗|律詩)/;
+const TWO_LINE_VERSE = /(绝|絕|律|排|古詩|古诗|樂府|乐府|歌行)/;
 const CIRCLED_NUMBERS = [..."①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚㉛㉜㉝㉞㉟㊱㊲㊳㊴㊵㊶㊷㊸㊹㊺㊻㊼㊽㊾㊿"];
 
 export function chineseNumber(value) {
@@ -40,7 +40,7 @@ export function proseParagraphs(prose) {
 
 export function poemParagraphs(lines, form) {
   const normalized = (Array.isArray(lines) ? lines : []).map((text, index) => ({ text, line: index + 1 }));
-  if (!REGULATED_VERSE.test(form || "")) return normalized.map(line => [line]);
+  if (!TWO_LINE_VERSE.test(form || "")) return normalized.map(line => [line]);
   const paragraphs = [];
   for (let index = 0; index < normalized.length; index += 2) {
     paragraphs.push(normalized.slice(index, index + 2));

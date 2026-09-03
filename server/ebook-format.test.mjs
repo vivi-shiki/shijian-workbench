@@ -41,6 +41,12 @@ test("non-regulated verse retains one source line per paragraph", () => {
   ]);
 });
 
+test("classical and extended regulated verse render two lines per paragraph", () => {
+  const lines = ["第一句，", "第二句。", "第三句，", "第四句。"];
+  assert.equal(poemParagraphs(lines, "五排").length, 2);
+  assert.equal(poemParagraphs(lines, "古詩").length, 2);
+});
+
 test("annotation segments insert numbered callouts at exact character offsets", () => {
   const notes = [
     { position: { field: "lines", line: 1, offset: 2 }, text: "甲注" },

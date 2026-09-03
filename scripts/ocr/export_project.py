@@ -8,7 +8,7 @@ from typing import Any
 from project_data import load_project
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def ordered_pages(project: dict[str, Any]) -> list[dict[str, Any]]:

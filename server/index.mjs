@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { HistoryStore } from "./change-history.mjs";
 import { EbookStore } from "./ebook-store.mjs";
+import { EbookReview } from "./ebook-review.mjs";
 import { ProjectStore } from "./project-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +17,7 @@ const projectsRoot = path.join(rootDir, "data", "projects");
 const historyStore = new HistoryStore(projectsRoot);
 const store = new ProjectStore(projectsRoot, historyStore);
 const ebookStore = new EbookStore(projectsRoot, store, historyStore);
+const ebookReview = new EbookReview(projectsRoot, historyStore);
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
@@ -243,6 +245,10 @@ app.put("/api/projects/:projectId/ebook", async (req, res) => {
 
 app.post("/api/projects/:projectId/ebook/run", async (req, res) => {
   res.json(await ebookStore.run(safeProjectId(req.params.projectId), req.body));
+});
+
+app.post("/api/projects/:projectId/ebook/candidates/:runId/apply", async (req, res) => {
+  res.json(await ebookReview.apply(safeProjectId(req.params.projectId), req.params.runId, req.body, ebookStore));
 });
 
 app.get("/api/projects/:projectId/history", async (req, res) => {

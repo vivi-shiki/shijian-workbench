@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageOps
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PROJECT_DIR = ROOT / "data" / "projects" / "yiyuji-photos"
 ORIGINALS_DIR = PROJECT_DIR / "originals"
 PAGES_DIR = PROJECT_DIR / "pages"

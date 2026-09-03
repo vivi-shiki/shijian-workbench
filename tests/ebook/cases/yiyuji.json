@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "project_id": "yiyuji-four-volumes",
+  "description": "历史反馈的候选断言，不是已批准的标准答案。使用前对照原页确认；不得传给生成模型。",
+  "cases": [
+    {
+      "id": "yongshi-four-quatrains",
+      "status": "proposed",
+      "pages": [34, 35],
+      "selector": { "series_title": "咏史" },
+      "expect": {
+        "count": 4, "line_count": 4, "characters_per_line": 7,
+        "series_indices": [1, 2, 3, 4], "series_total": 4,
+        "contains_lines": ["冠劍紛紜出石城"]
+      }
+    },
+    {
+      "id": "wuti-missing-ending",
+      "status": "proposed",
+      "pages": [35, 36],
+      "selector": { "first_line": "倚樹臨樓卧酒鑪" },
+      "expect": { "count": 1, "line_count": 8, "characters_per_line": 7 }
+    },
+    {
+      "id": "fengyuanfu-missing-couplet",
+      "status": "proposed",
+      "pages": [37, 38],
+      "selector": { "title": "贈馮元甫" },
+      "expect": { "count": 1, "line_count": 8, "characters_per_line": 7 }
+    },
+    {
+      "id": "chunqing-note-anchors",
+      "status": "proposed",
+      "pages": [39, 40],
+      "selector": { "title": "春晴" },
+      "expect": {
+        "count": 1, "line_count": 8, "characters_per_line": 5,
+        "note_anchors": [
+          { "text_includes": "白居易", "position": { "field": "lines", "line": 2, "offset": 2 } },
+          { "text_includes": "本草", "position": { "field": "lines", "line": 2, "offset": 5 } },
+          { "text_includes": "權德輿", "position": { "field": "lines", "line": 3, "offset": 2 } },
+          { "text_includes": "孟郊", "position": { "field": "lines", "line": 4, "offset": 2 } },
+          { "text_includes": "埤雅", "position": { "field": "lines", "line": 5, "offset": 3 } },
+          { "text_includes": "元稹", "position": { "field": "lines", "line": 6, "offset": 5 } },
+          { "text_includes": "歲時記", "position": { "field": "lines", "line": 7, "offset": 4 } }
+        ]
+      }
+    },
+    {
+      "id": "xiaoyuanxiang-two-quatrains",
+      "status": "proposed",
+      "pages": [40, 41],
+      "selector": { "series_title": "效元相體" },
+      "expect": { "count": 2, "line_count": 4, "characters_per_line": 7, "series_indices": [1, 2], "series_total": 2 }
+    }
+  ]
+}

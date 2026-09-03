@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { atomicJson, safeId } from "./project-store.mjs";
+import { hashJson } from "./change-history.mjs";
 
 const ENTRY_KINDS = new Set(["heading", "book_text", "biography", "poem", "preface", "note", "colophon", "other"]);
 const LEGACY_HEADING_LEVELS = new Map([["volume", 1], ["year", 2], ["section", 3]]);
@@ -34,12 +35,12 @@ function normalizeLines(value) {
 
 function normalizeNotePosition(value) {
   if (!value || typeof value !== "object") return null;
-  const field = value.field === "title" ? "title" : value.field === "lines" ? "lines" : null;
+  const field = ["title", "series", "lines"].includes(value.field) ? value.field : null;
   const line = Number(value.line);
   const offset = Number(value.offset);
   if (!field || !Number.isInteger(offset) || offset < 0) return null;
   if (field === "lines" && (!Number.isInteger(line) || line < 1)) return null;
-  return field === "title" ? { field, offset } : { field, line, offset };
+  return field === "lines" ? { field, line, offset } : { field, offset };
 }
 
 function codePointEnd(source, marker) {
@@ -54,6 +55,7 @@ function codePointEnd(source, marker) {
 
 function defaultNotePosition(entry) {
   if (asText(entry.title)) return { field: "title", offset: [...asText(entry.title)].length };
+  if (asText(entry.series?.title)) return { field: "series", offset: [...asText(entry.series.title)].length };
   if (entry.lines?.length) return { field: "lines", line: 1, offset: 0 };
   return null;
 }
@@ -63,6 +65,8 @@ function locateMarker(entry, marker) {
   if (anchor && anchor !== "題注") {
     const titleOffset = codePointEnd(asText(entry.title), anchor);
     if (titleOffset != null) return { field: "title", offset: titleOffset };
+    const seriesOffset = codePointEnd(asText(entry.series?.title), anchor);
+    if (seriesOffset != null) return { field: "series", offset: seriesOffset };
     for (let index = 0; index < (entry.lines || []).length; index += 1) {
       const offset = codePointEnd(asText(entry.lines[index]), anchor);
       if (offset != null) return { field: "lines", line: index + 1, offset };
@@ -99,6 +103,7 @@ function positionFitsEntry(position, entry) {
   const normalized = normalizeNotePosition(position);
   if (!normalized) return false;
   if (normalized.field === "title") return normalized.offset <= [...asText(entry.title)].length;
+  if (normalized.field === "series") return normalized.offset <= [...asText(entry.series?.title)].length;
   const line = entry.lines[normalized.line - 1];
   return typeof line === "string" && normalized.offset <= [...line].length;
 }
@@ -297,6 +302,19 @@ function pageEvidence(page) {
   };
 }
 
+export function buildEbookRules() {
+  return [
+    "1. 不翻译、不改写、不补写原书没有的句子；保留繁体字、异体字、人名和原注。",
+    "2. 删除扫描机构、数位化、典藏等后加水印，不把版心、页码、书口和刻印信息混入正文。",
+    "3. 恢复竖排从右到左、每栏从上到下的阅读顺序。大字正文旁的双行小字通常是逐句注文，不得混入诗句。",
+    "4. 卷名、年次（如乙卯年、丙辰年）和其他目录标题不能遗漏。所有目录标题都使用 kind=heading，并用数字 heading_level=1..6 表示抽象层级（1 最高）；通常卷名为 1、卷内年次为 2，但应按原书实际目录关系判断，不把年份写进某首诗的 title/subtitle。作品组题使用 series，不属于目录层级。扉页题字、卷端撰注者、出版题记等使用 book_text。作者传使用 biography 和 prose。",
+    "5. 诗歌放入 lines，lines 的每个数组元素必须是一个完整诗句并带现代标点，不得把两句、四句或整首粘成一个元素。绝句、律诗的奇数句末通常用逗号，偶数句末通常用句号；前台会把相邻两句合为一个排版段落，所以 JSON 中仍须一项一句。古体诗依句意断句，一般也以相邻两句为一个语意段。词、曲必须按词牌或曲牌句式断句，并用一个空字符串作为上下阕分隔。散文放入 prose；夹注放入 notes。每条注必须用 position 记录圈号插入位置，不得用所注的几个字或整句作为 marker：诗句位置为 {field:'lines',line:从1开始的行号,offset:该行第几个Unicode字符后}，独立题下注为 {field:'title',offset:标题第几个Unicode字符后}，组题下注为 {field:'series',offset:组题第几个Unicode字符后}。必须先从注文内容和原版位置找出被注的具体词语，再把 offset 设在该词语之后；不得为省事统一挂在诗句末尾，也不得把同句中所注词语不同的两条注文合并。notes[].text 必须按完整句意添加现代中文标点，正确断开书名、人名、篇名、引诗和按语，不得只在末尾机械加句号，也不得改变任何原文字词。序题附近出现的署名只有版面明确表明作者关系时才写入 author，不能从文末落款臆造标题作者。",
+    "6. 组诗必须拆成一首一个 poem 条目，并用相同 series.title、递增 series.index 和可确认的 series.total 关联。组诗总题只能写在 series.title；除非原书另有子题，各首 title 留空，禁止把总题或首句复制为每首题名。前台依据 series.index 显示“其一、其二”等中文序次，JSON 只记录数字。近体诗按每句字数、句数、偶数句押韵及版面题名共同判体：七绝为四个七言句，七律为八个七言句，五绝为四个五言句，五律为八个五言句。没有独立题名的连续作品不得用首句冒充题名，应结合上方总题建立 series。古体诗、乐府、词、曲、联句等须按原书题名、体式、分阕和版面边界处理，不得强行套用绝句或律诗句数。每首的 notes 必须紧随该首保存，不得汇总到组末。",
+    "7. 序跋、传记等 prose 必须按文意添加现代中文标点，并按论旨转换、叙事阶段、评议、作序缘起和落款划分自然段，以两个换行符分段；不要按固定字数机械断句或分段。只能增加标点和空白，不得改变字词。无法确认的字或边界不要擅断，在 issues 中记录候选；不要使用 Markdown。",
+    "8. 辨认题名必须结合字号、栏位、题名后的注文和下一题名位置，不得把正文首句当题名，也不得因换页把同一首诗拆开。较长题名按现代句意添加逗号、句号、冒号或引号；嵌在题名旁的小字注文仍进入 notes，不得混进 title。版面以连续方框、空格或明显缺刻表示缺字时，按每个缺字保留一个“□”，不得猜补。相邻题名之间若同时出现前作续文和后作正文，应按题名所在栏位及五七言句数分别归属；证据不足时保留原边界并写入 issues。",
+  ];
+}
+
 export function buildEbookPrompt(documentTitle, pageBundles, previousEntries, learningContext = "") {
   const expected = {
     entries: [{
@@ -310,7 +328,7 @@ export function buildEbookPrompt(documentTitle, pageBundles, previousEntries, le
       series: { title: "组诗总题；非组诗时为 null", index: 1, total: 6 },
       lines: ["诗歌正文逐行；非诗歌为空数组"],
       prose: "序跋、传记等散文，按文意添加现代标点，并用两个换行符分隔自然段；诗歌为空字符串",
-      notes: [{ position: { field: "lines", line: 1, offset: 7 }, text: "注文正文" }],
+      notes: [{ position: { field: "lines|title|series", line: 1, offset: 7 }, text: "注文正文" }],
       source_pages: [1],
       confidence: 0.9
     }],
@@ -322,14 +340,8 @@ export function buildEbookPrompt(documentTitle, pageBundles, previousEntries, le
     `当前项目书名：${JSON.stringify(asText(documentTitle) || "书名待定")}。只把它作为识别上下文，不得凭书名补写正文。`,
     "同一页可能提供两套 OCR。它们不是两篇文本：请逐项比对，以人工校正后的文字为最高优先级，并利用另一套结果补足明显漏字或版面类别。",
     "严格要求：",
-    "1. 不翻译、不改写、不补写原书没有的句子；保留繁体字、异体字、人名和原注。",
-    "2. 删除扫描机构、数位化、典藏等后加水印，不把版心、页码、书口和刻印信息混入正文。",
-    "3. 恢复竖排从右到左、每栏从上到下的阅读顺序。大字正文旁的双行小字通常是逐句注文，不得混入诗句。",
-    "4. 卷名、年次（如乙卯年、丙辰年）和其他目录标题不能遗漏。所有目录标题都使用 kind=heading，并用数字 heading_level=1..6 表示抽象层级（1 最高）；通常卷名为 1、卷内年次为 2，但应按原书实际目录关系判断，不把年份写进某首诗的 title/subtitle。作品组题使用 series，不属于目录层级。扉页题字、卷端撰注者、出版题记等使用 book_text。作者传使用 biography 和 prose。",
-    "5. 诗歌放入 lines，依原书的诗行、分阕或曲牌层次分行；散文放入 prose；夹注放入 notes。每条注必须用 position 记录圈号插入位置，不得用所注的几个字或整句作为 marker：诗句位置为 {field:'lines',line:从1开始的行号,offset:该行第几个Unicode字符后}，题下注为 {field:'title',offset:标题第几个Unicode字符后}。notes[].text 必须按完整句意添加现代中文标点，正确断开书名、人名、篇名、引诗和按语，不得只在末尾机械加句号，也不得改变任何原文字词。序题附近出现的署名只有版面明确表明作者关系时才写入 author，不能从文末落款臆造标题作者。",
-    "6. 组诗必须拆成一首一个 poem 条目，并用相同 series.title、递增 series.index 和可确认的 series.total 关联。近体诗按每句字数、句数、偶数句押韵及版面题名共同判体：七绝为四个七言句，七律为八个七言句，五律为八个五言句。古体诗、乐府、词、曲、联句等须按原书题名、体式、分阕和版面边界处理，不得强行套用绝句或律诗句数。每首的 notes 必须紧随该首保存，不得汇总到组末。",
-    "7. 序跋、传记等 prose 必须按文意添加现代中文标点，并按论旨转换、叙事阶段、评议、作序缘起和落款划分自然段，以两个换行符分段；不要按固定字数机械断句或分段。只能增加标点和空白，不得改变字词。无法确认的字或边界不要擅断，在 issues 中记录候选；不要使用 Markdown。",
-    "8. pageBundles 中 context_only=true 的前后页仅用于判断跨页续接和边界，不得输出这些页的正文，也不得把它们写入 source_pages。只输出 context_only=false 的5个核心页对应的 JSON。若核心页开头明显承接上一批条目，用 continuation_of 指向给出的 entry id；若核心页末尾尚未完结，只输出本批实际出现的文字，留待下一批续接。",
+    ...buildEbookRules(),
+    "9. pageBundles 中 context_only=true 的前后页仅用于判断跨页续接和边界，不得输出这些页的正文，也不得把它们写入 source_pages。只输出 context_only=false 的5个核心页对应的 JSON。若核心页开头明显承接上一批条目，用 continuation_of 指向给出的 entry id；若核心页末尾尚未完结，只输出本批实际出现的文字，留待下一批续接。",
     learningContext ? `以下是本项目由修改历史自动提炼的经验。它只用于提示可能的惯例和易错点；当前原图、人工校正文和本批 OCR 证据优先，不得机械套用：\n${learningContext}` : "",
     `输出形状：${JSON.stringify(expected)}`,
     `上一批末尾条目：${JSON.stringify(previousEntries)}`,
@@ -390,6 +402,7 @@ export class EbookStore {
     this.projectStore = projectStore;
     this.history = history;
     this.running = new Set();
+    this.writes = new Map();
   }
 
   directory(projectId) {
@@ -424,24 +437,37 @@ export class EbookStore {
 
   async save(projectId, document, audit = {}) {
     const id = safeId(projectId);
+    const previous = this.writes.get(id) || Promise.resolve();
+    const pending = previous.catch(() => {}).then(() => this.saveUnlocked(id, document, audit));
+    this.writes.set(id, pending);
+    try { return await pending; }
+    finally { if (this.writes.get(id) === pending) this.writes.delete(id); }
+  }
+
+  async saveUnlocked(id, document, audit) {
+    if (this.running.has(id)) throw Object.assign(new Error("Generation is running; cannot save concurrently"), { status: 409 });
     await this.projectStore.index(id);
     const before = await fs.readFile(this.filename(id), "utf8").then(JSON.parse).catch(error => {
       if (error.code === "ENOENT") return null;
       throw error;
     });
-    migrateLegacyNotePositions(normalizeDocumentHeadings(document));
+    if (audit.expected_hash !== undefined && hashJson(before) !== audit.expected_hash) {
+      throw Object.assign(new Error("Baseline changed; review current edits before applying the candidate"), { status: 409 });
+    }
+    // Approved candidates must not be silently normalized after their hash was reviewed.
+    if (audit.expected_hash === undefined) migrateLegacyNotePositions(normalizeDocumentHeadings(document));
     validateEbook(document, id);
     document.generation = { ...document.generation, updated_at: now() };
     await atomicJson(this.filename(id), document);
     await this.history?.recordChange({ projectId: id, target: { kind: "ebook" }, before, after: document,
       actor: audit.actor || "human", source: audit.source || "ebook-json-editor", operation: "edit_ebook",
-      note: audit.note || "", metadata: audit.metadata || {} });
+      note: audit.note || "", metadata: audit.metadata || {}, runId: audit.run_id });
     return { document, config: this.config() };
   }
 
   async run(projectId, options = {}) {
     const id = safeId(projectId);
-    if (this.running.has(id)) throw Object.assign(new Error("该项目的诗歌类古籍结构化任务正在运行"), { status: 409 });
+    if (this.running.has(id) || this.writes.has(id)) throw Object.assign(new Error("该项目正在生成或保存，请稍后再试"), { status: 409 });
     const config = this.config();
     if (!config.configured) {
       throw Object.assign(new Error("未配置 SILICONFLOW_API_KEY，请在 .env.local 中设置后重启 API"), { status: 400 });

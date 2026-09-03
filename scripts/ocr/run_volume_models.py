@@ -11,7 +11,7 @@ from PIL import Image
 from build_project import convert_regions_remote_paddlevl, now_iso
 from run_remote_paddlevl import post_ocr, download_file
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MODELS = {"paddleocr-vl": "PaddleOCR-VL v1.6", "pp-ocrv6": "PP-OCRv6 medium"}
 
 

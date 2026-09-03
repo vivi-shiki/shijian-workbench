@@ -57,7 +57,11 @@ function formatJson(value) {
 }
 
 function entryName(entry, index) {
-  return entry.title || entry.lines?.[0] || entry.prose?.slice(0, 16) || `${KIND_LABELS[entry.kind] || "条目"} ${index + 1}`;
+  if (entry.title) return entry.title;
+  if (entry.series?.title) {
+    return [displayedSeriesTitle(entry.series.title), seriesOrdinal(entry.series.index)].filter(Boolean).join(" · ");
+  }
+  return entry.lines?.[0] || entry.prose?.slice(0, 16) || `${KIND_LABELS[entry.kind] || "条目"} ${index + 1}`;
 }
 
 function entryKindLabel(entry) {
@@ -91,6 +95,24 @@ export default function EbookWorkspace({ project }) {
   const [forceRun, setForceRun] = React.useState(false);
   const editVersion = React.useRef(0);
   const appliedVersion = React.useRef(0);
+  const previewPaneRef = React.useRef(null);
+
+  const navigateToEntry = React.useCallback((entryId) => {
+    setSelectedEntryId(entryId);
+    window.requestAnimationFrame(() => {
+      const pane = previewPaneRef.current;
+      const target = pane?.querySelector(`[data-entry-id="${CSS.escape(entryId)}"]`);
+      if (!pane || !target) return;
+      const paneRect = pane.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const offset = targetRect.top - paneRect.top - 12;
+      if (pane.scrollHeight > pane.clientHeight + 1) {
+        pane.scrollTo({ top: Math.max(0, pane.scrollTop + offset), behavior: "smooth" });
+      } else {
+        window.scrollTo({ top: Math.max(0, window.scrollY + targetRect.top - 12), behavior: "smooth" });
+      }
+    });
+  }, []);
 
   const applyPayload = React.useCallback((payload, preserveEditor = false) => {
     setDocument(payload.document);
@@ -299,7 +321,8 @@ export default function EbookWorkspace({ project }) {
         <div className="outline-list">
           {document.entries.map((entry, index) => (
             <button key={entry.id} className={entry.id === selectedEntryId ? "is-active" : ""}
-              onClick={() => setSelectedEntryId(entry.id)}>
+              aria-current={entry.id === selectedEntryId ? "location" : undefined}
+              onClick={() => navigateToEntry(entry.id)}>
               <small>{entryKindLabel(entry)} · P{entry.source_pages.join(",") || "?"}</small>
               <strong>{entryName(entry, index)}</strong>
               {entry.review_status === "reviewed" ? <Check size={14} /> : <CircleDot size={12} />}
@@ -309,7 +332,7 @@ export default function EbookWorkspace({ project }) {
         </div>
       </aside>
 
-      <section className="ebook-preview-pane">
+      <section className="ebook-preview-pane" ref={previewPaneRef}>
         <header><span>电子排版</span><small>{document.title}</small></header>
         <EbookPreview document={document} selectedEntryId={selectedEntryId} onSelect={setSelectedEntryId} />
       </section>
@@ -345,10 +368,11 @@ function EbookPreview({ document, selectedEntryId, onSelect }) {
         const headingDepth = entry.kind === "heading" ? headingLevel(entry) : null;
         const HeadingTag = headingDepth ? `h${Math.min(6, headingDepth + 2)}` : "h3";
         return (
-        <section key={entry.id} className={`ebook-entry kind-${entry.kind} ${headingDepth ? `heading-level-${headingDepth}` : ""} ${entry.id === selectedEntryId ? "is-selected" : ""}`}
+        <section key={entry.id} data-entry-id={entry.id} className={`ebook-entry kind-${entry.kind} ${headingDepth ? `heading-level-${headingDepth}` : ""} ${entry.id === selectedEntryId ? "is-selected" : ""}`}
           onClick={() => onSelect(entry.id)}>
-          {entry.series?.title && document.entries[entryIndex - 1]?.series?.title !== entry.series.title && (
-            <h3 className="series-title">{displayedSeriesTitle(entry.series.title)}</h3>
+          {entry.series?.title && document.entries[entryIndex - 1]?.series?.title !== entry.series.title &&
+            document.entries[entryIndex - 1]?.title !== entry.series.title && (
+            <h3 className="series-title"><AnnotatedText text={displayedSeriesTitle(entry.series.title)} notes={entry.notes} field="series" /></h3>
           )}
           {entry.title && (headingDepth
             ? <HeadingTag className="directory-title"><AnnotatedText text={entry.title} notes={entry.notes} field="title" /></HeadingTag>
@@ -364,8 +388,7 @@ function EbookPreview({ document, selectedEntryId, onSelect }) {
           {entry.prose && <div className="entry-prose">{proseParagraphs(entry.prose).map((paragraph, index) => (
             <p key={`${entry.id}-prose-${index}`}>{paragraph}</p>
           ))}</div>}
-          {entry.notes?.length > 0 && <aside className="entry-notes" aria-label="注释">
-            <h4>注释</h4>
+          {entry.notes?.length > 0 && <aside className="entry-notes" aria-label="注文">
             {entry.notes.map((note, index) => (
               <p key={`${entry.id}-note-${index}`}><span>{circledNumber(index + 1)}</span>{displayedNoteText(note.text)}</p>
             ))}

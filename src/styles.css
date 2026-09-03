@@ -1072,6 +1072,7 @@ button:disabled { cursor: default; opacity: .65; }
 .ebook-entry {
   margin: 0 0 32px;
   padding: 8px;
+  scroll-margin-top: 54px;
   cursor: pointer;
 }
 .ebook-entry.is-selected { outline: 1px solid #d8d0c4; }
@@ -1300,6 +1301,7 @@ button:disabled { cursor: default; opacity: .65; }
   .model-field { flex: 1; }
   .ebook-outline { grid-column: 1; grid-row: 2; border-right: 0; border-bottom: 1px solid var(--line); }
   .ebook-preview-pane { grid-column: 1; grid-row: 3; overflow: visible; }
+  .ebook-entry { scroll-margin-top: 12px; }
   .ebook-json-pane { grid-column: 1; grid-row: 4; border-left: 0; border-top: 1px solid var(--line); }
   .ebook-page { width: min(720px, calc(100% - 24px)); margin: 12px auto; }
 

@@ -26,7 +26,7 @@ function clone(value) {
   return value == null ? value : structuredClone(value);
 }
 
-function hashJson(value) {
+export function hashJson(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
@@ -581,6 +581,24 @@ export class HistoryStore {
     await atomicJson(path.join(directory, "manifest.json"), manifest);
     if (details.input !== undefined) await atomicJson(path.join(directory, "input.json"), details.input);
     return manifest;
+  }
+
+  async readRun(projectId, runId) {
+    const directory = path.join(this.historyDirectory(projectId), "runs", safePart(runId));
+    const manifest = await this.readJson(path.join(directory, "manifest.json"));
+    if (!manifest || manifest.project_id !== projectId || manifest.id !== runId) throw new Error("Run not found");
+    const input = await this.readJson(path.join(directory, "input.json"));
+    const output = await this.readJson(path.join(directory, "output.json"));
+    if (manifest.input_hash && hashJson(input) !== manifest.input_hash) throw new Error("Run input hash mismatch");
+    if (manifest.output_hash && hashJson(output) !== manifest.output_hash) throw new Error("Run output hash mismatch");
+    const steps = [];
+    for (const artifact of manifest.artifacts || []) {
+      if (!/^steps\/[a-z0-9-]+\.json$/i.test(artifact.path)) throw new Error("Invalid run artifact path");
+      const step = await this.readJson(path.join(directory, artifact.path));
+      if (hashJson(step) !== artifact.sha256) throw new Error("Run artifact hash mismatch");
+      steps.push(step);
+    }
+    return { manifest, input, output, steps };
   }
 
   async recordRunStep(projectId, runId, step) {

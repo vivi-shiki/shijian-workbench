@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_PROMPT = """你是古籍OCR转录器。请识别图片中的繁体中文、异体字、古籍小注和页眉页脚。
 

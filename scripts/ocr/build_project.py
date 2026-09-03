@@ -11,7 +11,7 @@ from PIL import Image
 from project_data import load_project
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def now_iso() -> str:

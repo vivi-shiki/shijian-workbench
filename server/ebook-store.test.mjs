@@ -15,7 +15,24 @@ test("ebook prompt uses the current title and supports broad poetry genres", () 
   assert.match(prompt, /古体诗、乐府、词、曲、联句/);
   assert.match(prompt, /人工曾将『雨集』校为『疑雨集』/);
   assert.match(prompt, /不得机械套用/);
+  assert.match(prompt, /组题下注为 \{field:'series'/);
+  assert.match(prompt, /不得为省事统一挂在诗句末尾/);
+  assert.match(prompt, /每个缺字保留一个“□”/);
   assert.doesNotMatch(prompt, /疑雨集注/);
+});
+
+test("generated group-title notes retain series positions", () => {
+  const document = emptyEbook(project);
+  mergeGenerated(document, {
+    entries: [{
+      kind: "poem", title: "", series: { title: "王敬宏夫人", index: 1, total: 2 },
+      lines: ["第一句。"], source_pages: [1],
+      notes: [{ position: { field: "series", offset: 3 }, text: "组题注" }]
+    }],
+    issues: []
+  }, 1, 5);
+  assert.deepEqual(document.entries[0].notes[0].position, { field: "series", offset: 3 });
+  assert.equal(validateEbook(document, "book"), document);
 });
 
 test("generated entries are normalized and can continue the previous chunk", () => {

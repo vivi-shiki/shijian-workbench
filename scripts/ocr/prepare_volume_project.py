@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 from pypdf import PdfReader
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/pdf-render-deps"))
 
 

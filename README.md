@@ -24,6 +24,10 @@ npm run dev
 
 ## 诗歌古籍结构化（第二步）
 
+脚本已按 OCR、维护和样本分组。反馈修订统一使用 `scripts/ebook.mjs` 的
+`generate → evaluate → apply` 候选流程，详见 [脚本使用说明](scripts/README.md)。
+此流程不直接覆盖正文；下述首页首次生成流程仍按批保存，两者暂未合并。
+
 首页顶部的工作流 Tab 分为“1 双 OCR 与校对”和“2 诗歌古籍结构化”。第二步读取第一步已经修改并保存的
 `edited_text`，可选择最多两套 OCR 结果互校。任务每 5 个核心页调用一次模型，同时携带前后各 1 页作为跨页上下文；完成一组就写入
 `data/projects/<project-id>/ebook/structured.json`；中途失败后再次运行会从已完成页继续。
@@ -47,6 +51,7 @@ SILICONFLOW_MAX_TOKENS=8192
 GET  /api/projects/:projectId/ebook
 PUT  /api/projects/:projectId/ebook
 POST /api/projects/:projectId/ebook/run
+POST /api/projects/:projectId/ebook/candidates/:runId/apply
 GET  /api/projects/:projectId/history
 GET  /api/projects/:projectId/ai-memory
 ```
@@ -110,7 +115,7 @@ data/projects/<project-id>/
 
 旧格式由 API 自动迁移。显式模型名称会保留，只有接口/provider 名称而无法确认模型的历史结果标为 Archive（模型未知）。
 本次已把原有 13 个项目归档。迁移不重做 OCR，也不改动原有 pages 内的任何字段。
-`node scripts/migrate_projects.mjs --archive-existing` 会归档运行时的全部项目，不要在日常启动中重复执行。
+`node scripts/maintenance/migrate_projects.mjs --archive-existing` 会归档运行时的全部项目，不要在日常启动中重复执行。
 
 多卷 PDF 导入（按实际卷次顺序重复传入 `--pdf`）：
 
@@ -134,7 +139,7 @@ JSON 导出是当前结果的页面快照；完整备份应保留整个项目目
 ```powershell
 node --test server/project-store.test.mjs
 npm run build
-python scripts/export_project.py --project-id <project-id> --result-id pp-ocrv6 --mode edited
+python scripts/ocr/export_project.py --project-id <project-id> --result-id pp-ocrv6 --mode edited
 ```
 
 ## 常用命令
@@ -142,7 +147,7 @@ python scripts/export_project.py --project-id <project-id> --result-id pp-ocrv6 
 重新渲染 PDF 页面：
 
 ```powershell
-.\scripts\render_pdf_pages.ps1 -InputPdf "sample.pdf" -OutputDir "data/projects/sample/pages" -FirstPage 1 -LastPage 20 -Dpi 144
+.\scripts\ocr\render_pdf_pages.ps1 -InputPdf "sample.pdf" -OutputDir "data/projects/sample/pages" -FirstPage 1 -LastPage 20 -Dpi 144
 ```
 
 重建中间 JSON：
@@ -171,7 +176,7 @@ npm run project:export -- --project-id <project-id> --mode edited
 重新生成旋正图片：
 
 ```powershell
-python scripts/prepare_yiyuji_photos.py
+python scripts/samples/prepare_yiyuji_photos.py
 ```
 
 重新生成照片项目中间 JSON：
@@ -246,7 +251,7 @@ paddleocr-vl-1.6
 也可以直接运行脚本并覆盖参数：
 
 ```powershell
-python scripts/run_openai_vl.py --project-id yiyuji-photos --pages 1-6 --base-url http://192.168.50.100:1234/v1 --model paddleocr-vl-1.6 --force
+python scripts/ocr/run_openai_vl.py --project-id yiyuji-photos --pages 1-6 --base-url http://192.168.50.100:1234/v1 --model paddleocr-vl-1.6 --force
 ```
 
 当前远程接口返回的是页级文本，不返回稳定 bbox。因此构建出的远程项目默认是一页一个可编辑文本块；如果服务端以后返回 `regions` 和 `bbox`，构建脚本会自动转换为分块区域。

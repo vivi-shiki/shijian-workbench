@@ -82,17 +82,17 @@ $env:PADDLEOCR_VL_DEVICE="cpu"
 From the workbench project on the client machine, using a generic photo-page project:
 
 ```powershell
-python scripts/run_remote_paddlevl.py --project-id sample-photos --pages 1-6 --service-url http://<remote-ip>:8000 --output-name remote-paddlevl-vl --force
-python scripts/build_project.py --project-id sample-photos-vl --pages-project-id sample-photos --ocr-project-id sample-photos --ocr-dir-name remote-paddlevl-vl --ocr-provider remotepaddlevl --title "古籍照片 OCR 样本" --source-path data/projects/sample-photos/source-images.json --no-preserve-edits
-python scripts/export_project.py --project-id sample-photos-vl --mode edited
+python scripts/ocr/run_remote_paddlevl.py --project-id sample-photos --pages 1-6 --service-url http://<remote-ip>:8000 --output-name remote-paddlevl-vl --force
+python scripts/ocr/build_project.py --project-id sample-photos-vl --pages-project-id sample-photos --ocr-project-id sample-photos --ocr-dir-name remote-paddlevl-vl --ocr-provider remotepaddlevl --title "古籍照片 OCR 样本" --source-path data/projects/sample-photos/source-images.json --no-preserve-edits
+python scripts/ocr/export_project.py --project-id sample-photos-vl --mode edited
 ```
 
 PDF rendered pages:
 
 ```powershell
-python scripts/run_remote_paddlevl.py --project-id sample-pdf --pages 1-6 --service-url http://<remote-ip>:8000 --output-name remote-paddlevl-vl --no-unwarp --force
-python scripts/build_project.py --project-id sample-pdf-vl --pages-project-id sample-pdf --ocr-project-id sample-pdf --ocr-dir-name remote-paddlevl-vl --ocr-provider remotepaddlevl --title "古籍 PDF OCR 样本" --source-path data/input/sample.pdf --total-pages 100 --limit 6 --no-preserve-edits
-python scripts/export_project.py --project-id sample-pdf-vl --mode edited
+python scripts/ocr/run_remote_paddlevl.py --project-id sample-pdf --pages 1-6 --service-url http://<remote-ip>:8000 --output-name remote-paddlevl-vl --no-unwarp --force
+python scripts/ocr/build_project.py --project-id sample-pdf-vl --pages-project-id sample-pdf --ocr-project-id sample-pdf --ocr-dir-name remote-paddlevl-vl --ocr-provider remotepaddlevl --title "古籍 PDF OCR 样本" --source-path data/input/sample.pdf --total-pages 100 --limit 6 --no-preserve-edits
+python scripts/ocr/export_project.py --project-id sample-pdf-vl --mode edited
 ```
 
 ## API shape

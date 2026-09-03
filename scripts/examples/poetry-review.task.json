@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "boundary-review-example",
+  "mode": "structure",
+  "scope": "general",
+  "category": "cross_page_boundary",
+  "entry_ids": ["entry-0001"],
+  "result_ids": ["paddleocr-vl", "pp-ocrv6"],
+  "raw_feedback": "仅作模板：将原始反馈保存在这里供审计，不直接发送给生成模型。",
+  "rules": [
+    "分别阅读两套 OCR，依据题名位置、正文延续及注释归属确认作品边界；不能仅按 OCR 区块切分。",
+    "跨页有续文时保持同一作品；组诗逐首建条目，保留共用组题与序号。不用格律猜补缺字。",
+    "每个 lines 元素只放一个带现代标点的诗句，近体诗不能把两个或四个诗句合并为一项。",
+    "缺失、冲突及没有足够来源证据的文字留在 issues，不冒充人工校正。"
+  ]
+}
