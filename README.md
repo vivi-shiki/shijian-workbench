@@ -13,6 +13,25 @@
 7. 使用大语言模型识别目录层级、诗作、组诗、词曲、序跋、传记与注文关系。
 8. 导出 TXT、Markdown、HTML 和完整 JSON。
 
+## 代码模块
+
+代码按六个逻辑模块放在 `packages/` 下，仍共用根目录的依赖安装和 npm 命令：
+
+```text
+packages/
+  oldbook-core/      可复用的数据、候选、校验、审批和历史逻辑
+  oldbook-cli/       命令行入口、OCR、维护和样本脚本
+  oldbook-server/    本地 REST API 与可选远程 OCR 服务
+  oldbook-mcp/       预留的 MCP 适配层，目前不含运行实现
+  oldbook-skills/    Agent 使用说明的仓库副本
+  oldbook-review/    React/Vite 人工校对工作台
+```
+
+详细职责与依赖方向见 [模块说明](packages/README.md)。本次拆分只调整代码位置，现有 API、数据格式和根级 npm 命令保持不变。
+
+人工标准样本、忠实转录、作品结构、现代句读、错误案例和评测集应遵循
+[古籍截图转现代阅读版制作规范](docs/ANNOTATION_SPEC.md)。该规范同时说明当前 JSON 的过渡期映射、证据优先级和人工批准边界。
+
 ## 本地运行
 
 ```powershell
@@ -24,8 +43,9 @@ npm run dev
 
 ## 诗歌古籍结构化（第二步）
 
-脚本已按 OCR、维护和样本分组。反馈修订统一使用 `scripts/ebook.mjs` 的
-`generate → evaluate → apply` 候选流程，详见 [脚本使用说明](scripts/README.md)。
+命令行模块已按 OCR、维护和样本分组。反馈修订统一使用
+`packages/oldbook-cli/src/ebook.mjs` 的 `generate → evaluate → apply` 候选流程，详见
+[命令行模块说明](packages/oldbook-cli/README.md)。
 此流程不直接覆盖正文；下述首页首次生成流程仍按批保存，两者暂未合并。
 
 首页顶部的工作流 Tab 分为“1 双 OCR 与校对”和“2 诗歌古籍结构化”。第二步读取第一步已经修改并保存的
@@ -79,9 +99,9 @@ data/projects/<project-id>/
 Codex 直接改项目 JSON 时按仓库根目录 `AGENTS.md` 执行：
 
 ```powershell
-node scripts/history.mjs begin --project yiyuji-four-volumes --actor ai:codex --source codex-direct-edit --note "本次修改目的"
+node packages/oldbook-cli/src/history.mjs begin --project yiyuji-four-volumes --actor ai:codex --source codex-direct-edit --note "本次修改目的"
 # 修改 JSON
-node scripts/history.mjs commit --project yiyuji-four-volumes
+node packages/oldbook-cli/src/history.mjs commit --project yiyuji-four-volumes
 ```
 
 已有旧备份可一次性重建目前能确认的历史。无法从文件证据可靠判断的时间段会明确标为
@@ -115,7 +135,7 @@ data/projects/<project-id>/
 
 旧格式由 API 自动迁移。显式模型名称会保留，只有接口/provider 名称而无法确认模型的历史结果标为 Archive（模型未知）。
 本次已把原有 13 个项目归档。迁移不重做 OCR，也不改动原有 pages 内的任何字段。
-`node scripts/maintenance/migrate_projects.mjs --archive-existing` 会归档运行时的全部项目，不要在日常启动中重复执行。
+`node packages/oldbook-cli/src/maintenance/migrate_projects.mjs --archive-existing` 会归档运行时的全部项目，不要在日常启动中重复执行。
 
 多卷 PDF 导入（按实际卷次顺序重复传入 `--pdf`）：
 
@@ -137,9 +157,9 @@ JSON 导出是当前结果的页面快照；完整备份应保留整个项目目
 重建已迁移项目时，`build_project.py` 必须用新的 `--result-id`，通过已运行的本地 API 追加结果，保护已校对内容。
 
 ```powershell
-node --test server/project-store.test.mjs
+node --test packages/oldbook-core/test/project-store.test.mjs
 npm run build
-python scripts/ocr/export_project.py --project-id <project-id> --result-id pp-ocrv6 --mode edited
+python packages/oldbook-cli/src/ocr/export_project.py --project-id <project-id> --result-id pp-ocrv6 --mode edited
 ```
 
 ## 常用命令
@@ -147,7 +167,7 @@ python scripts/ocr/export_project.py --project-id <project-id> --result-id pp-oc
 重新渲染 PDF 页面：
 
 ```powershell
-.\scripts\ocr\render_pdf_pages.ps1 -InputPdf "sample.pdf" -OutputDir "data/projects/sample/pages" -FirstPage 1 -LastPage 20 -Dpi 144
+.\packages\oldbook-cli\src\ocr\render_pdf_pages.ps1 -InputPdf "sample.pdf" -OutputDir "data/projects/sample/pages" -FirstPage 1 -LastPage 20 -Dpi 144
 ```
 
 重建中间 JSON：
@@ -176,7 +196,7 @@ npm run project:export -- --project-id <project-id> --mode edited
 重新生成旋正图片：
 
 ```powershell
-python scripts/samples/prepare_yiyuji_photos.py
+python packages/oldbook-cli/src/samples/prepare_yiyuji_photos.py
 ```
 
 重新生成照片项目中间 JSON：
@@ -251,7 +271,7 @@ paddleocr-vl-1.6
 也可以直接运行脚本并覆盖参数：
 
 ```powershell
-python scripts/ocr/run_openai_vl.py --project-id yiyuji-photos --pages 1-6 --base-url http://192.168.50.100:1234/v1 --model paddleocr-vl-1.6 --force
+python packages/oldbook-cli/src/ocr/run_openai_vl.py --project-id yiyuji-photos --pages 1-6 --base-url http://192.168.50.100:1234/v1 --model paddleocr-vl-1.6 --force
 ```
 
 当前远程接口返回的是页级文本，不返回稳定 bbox。因此构建出的远程项目默认是一页一个可编辑文本块；如果服务端以后返回 `regions` 和 `bbox`，构建脚本会自动转换为分块区域。

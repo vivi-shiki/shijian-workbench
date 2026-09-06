@@ -59,3 +59,4 @@ Desktop.ini
 /tools/pdf-render-deps/
 /tools/ndlkotenocr-lite/
 /remote/*.zip
+/packages/oldbook-server/remote/*.zip
