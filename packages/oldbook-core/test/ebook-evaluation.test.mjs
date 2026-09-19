@@ -82,6 +82,6 @@ test("regression suites reject unknown assertions instead of silently passing", 
 test("historical case data is valid but explicitly unapproved", async () => {
   const cases = JSON.parse(await fs.readFile(new URL("./cases/yiyuji.json", import.meta.url), "utf8"));
   validateCases(cases, "yiyuji-four-volumes");
-  assert.equal(cases.cases.length, 5);
+  assert.equal(cases.cases.length, 9);
   assert.ok(cases.cases.every(c => c.status === "proposed"));
 });

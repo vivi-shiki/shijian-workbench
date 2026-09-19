@@ -177,10 +177,15 @@ app.get("/api/projects", async (_req, res) => {
     try {
       const project = await store.index(entry.name);
       const active = project.results.find(r => r.id === project.active_result_id);
+      const sourcePages = project.source?.pages || [];
       projects.push({
         id: project.id,
         title: project.title,
-        pages: active?.page_count || 0,
+        pages: sourcePages.length || active?.page_count || 0,
+        page_range: sourcePages.length ? {
+          start: Math.min(...sourcePages.map(page => page.page_number)),
+          end: Math.max(...sourcePages.map(page => page.page_number))
+        } : null,
         regions: active?.regions || 0,
         archived: Boolean(project.archived),
         results: project.results
@@ -198,9 +203,40 @@ app.get("/api/projects", async (_req, res) => {
   });
 });
 
+app.get("/api/projects/:projectId/reader", async (req, res) => {
+  try {
+    const projectId = safeProjectId(req.params.projectId);
+    const requestedFrom = Number(req.query.from);
+    const requestedTo = Number(req.query.to);
+    const from = Number.isInteger(requestedFrom) && requestedFrom > 0 ? requestedFrom : undefined;
+    const to = Number.isInteger(requestedTo) && requestedTo >= from ? requestedTo : undefined;
+    const [reader, ebookPayload] = await Promise.all([
+      store.readerWindow(projectId, from, to),
+      ebookStore.read(projectId)
+    ]);
+    res.json({
+      manifest: null,
+      approval: null,
+      links: { summary: {}, links: [], by_target: {}, by_region: {} },
+      ebook: ebookPayload.document,
+      ...reader
+    });
+  } catch (error) {
+    res.status(error.status || 404).json({
+      error: "reader_not_found",
+      message: error.message
+    });
+  }
+});
+
 app.get("/api/project/:projectId", async (req, res) => {
   try {
-    res.json(await readProject(req.params.projectId, req.query.result));
+    const project = await readProject(req.params.projectId, req.query.result);
+    const start = Number(req.query.from);
+    const end = Number(req.query.to);
+    res.json(Number.isInteger(start) && Number.isInteger(end) && end >= start
+      ? { ...project, pages: project.pages.filter(page => page.page_number >= start && page.page_number <= end) }
+      : project);
   } catch (error) {
     res.status(error.status || 404).json({
       error: "project_not_found",

@@ -27,11 +27,34 @@ export class ProjectStore {
     this.root = root;
     this.history = history;
     this.locks = new Map();
+    this.resultCache = new Map();
+    this.resultCacheLimit = 4;
   }
 
   directory(id) { return path.join(this.root, safeId(id)); }
   resultPath(id, resultId) { return path.join(this.directory(id), "results", `${safeId(resultId)}.json`); }
   async json(filename) { return JSON.parse(await fs.readFile(filename, "utf8")); }
+
+  async cachedResult(id, resultId) {
+    const filename = this.resultPath(id, resultId);
+    const stat = await fs.stat(filename);
+    const cached = this.resultCache.get(filename);
+    if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      this.resultCache.delete(filename);
+      this.resultCache.set(filename, cached);
+      return cached.value;
+    }
+    const value = await this.json(filename);
+    this.resultCache.set(filename, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+    while (this.resultCache.size > this.resultCacheLimit) {
+      this.resultCache.delete(this.resultCache.keys().next().value);
+    }
+    return value;
+  }
+
+  invalidateResult(id, resultId) {
+    this.resultCache.delete(this.resultPath(id, resultId));
+  }
 
   async record(projectId, details) {
     if (!this.history) return null;
@@ -105,6 +128,24 @@ export class ProjectStore {
     return project.schema_version === 2 ? project : this.migrate(id);
   }
 
+  async setArchived(id, archived, audit = {}) {
+    await this.index(id);
+    return this.locked(id, async () => {
+      const filename = path.join(this.directory(id), "project.json");
+      const project = await this.json(filename);
+      if (project.archived === Boolean(archived)) return project;
+      const before = structuredClone(project);
+      project.archived = Boolean(archived);
+      project.updated_at = new Date().toISOString();
+      await atomicJson(filename, project);
+      await this.record(id, { target: { kind: "project" }, before, after: project,
+        actor: audit.actor || "human", source: audit.source || "project-archive",
+        operation: project.archived ? "archive_project" : "unarchive_project",
+        note: audit.note || "", metadata: audit.metadata || {} });
+      return project;
+    });
+  }
+
   async view(id, resultId) {
     const project = await this.index(id);
     const selected = resultId || project.active_result_id;
@@ -114,6 +155,33 @@ export class ProjectStore {
     const result = await this.json(this.resultPath(id, selected));
     return { ...project, active_result_id: selected, workflow: result.workflow || project.workflow,
       pages: result.pages };
+  }
+
+  async readerWindow(id, start, end) {
+    const project = await this.index(id);
+    const loaded = await Promise.all(project.results.map(async descriptor => ({
+      descriptor,
+      result: await this.cachedResult(id, descriptor.id)
+    })));
+    const sourcePages = project.source?.pages?.length ? project.source.pages : loaded[0]?.result.pages || [];
+    const summaries = sourcePages.map(page => {
+      const { regions, source_pdf, ...summary } = page;
+      return summary;
+    }).sort((a, b) => a.page_number - b.page_number);
+    const firstPage = summaries[0]?.page_number || 1;
+    const from = Number.isInteger(start) ? start : firstPage;
+    const to = Number.isInteger(end) && end >= from ? end : from + 4;
+    const results = loaded.map(({ descriptor, result }) => ({
+      ...result,
+      id: descriptor.id,
+      label: descriptor.label || result.label || descriptor.id,
+      pages: result.pages.filter(page => page.page_number >= from && page.page_number <= to)
+    }));
+    return {
+      project: { ...project, source: { ...(project.source || {}), pages: summaries } },
+      results,
+      window: { from, to }
+    };
   }
 
   async save(id, input, audit = {}) {
@@ -142,6 +210,7 @@ export class ProjectStore {
         ? { ...updates.get(page.id), revision: (page.revision || 0) + 1 } : page);
       result.updated_at = new Date().toISOString();
       await atomicJson(this.resultPath(id, selected), result);
+      this.invalidateResult(id, selected);
       await this.record(id, { target: { kind: "result", result_id: selected }, before: originalResult, after: result,
         actor: audit.actor || "human", source: audit.source || "ocr-workbench", operation: "edit_ocr",
         note: audit.note || "", metadata: audit.metadata || {} });
@@ -179,6 +248,7 @@ export class ProjectStore {
         return project;
       }
       await atomicJson(this.resultPath(id, input.result.id), input.result);
+      this.invalidateResult(id, input.result.id);
       await this.record(id, { target: { kind: "result", result_id: input.result.id }, before: null, after: input.result,
         actor: audit.actor || "ai:ocr", source: audit.source || "ocr-import", operation: "import_result",
         note: audit.note || "", metadata: audit.metadata || {} });
@@ -208,6 +278,7 @@ export class ProjectStore {
       result.status = result.completed_pages === result.pages.length ? "complete" : "running";
       result.updated_at = new Date().toISOString();
       await atomicJson(this.resultPath(id, resultId), result);
+      this.invalidateResult(id, resultId);
       await this.record(id, { target: { kind: "result", result_id: resultId }, before: originalResult, after: result,
         actor: audit.actor || "ai:ocr", source: audit.source || "ocr-batch", operation: "import_page",
         note: audit.note || "", metadata: { ...(audit.metadata || {}), page_id: page.id } });

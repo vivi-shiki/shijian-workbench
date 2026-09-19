@@ -52,6 +52,63 @@
       "pages": [40, 41],
       "selector": { "series_title": "效元相體" },
       "expect": { "count": 2, "line_count": 4, "characters_per_line": 7, "series_indices": [1, 2], "series_total": 2 }
+    },
+    {
+      "id": "p45-first-line-is-not-title-and-no-duplicate",
+      "status": "proposed",
+      "pages": [45, 46],
+      "feedback_summary": "首句不得误作题名，跨页续接不得重复正文。",
+      "selector": { "first_line": "旅夢初囘百恨新" },
+      "expect": {
+        "count": 1,
+        "line_count": 8,
+        "characters_per_line": 7,
+        "unique_lines": true,
+        "punctuated_lines": true,
+        "title_differs_from_first_line": true
+      }
+    },
+    {
+      "id": "p48-zidao-complete-regulated-verse",
+      "status": "proposed",
+      "pages": [48, 49],
+      "feedback_summary": "跨页律诗必须补全，不能漏句或重复已有句。",
+      "selector": { "title": "自悼" },
+      "expect": {
+        "count": 1,
+        "line_count": 8,
+        "characters_per_line": 7,
+        "unique_lines": true,
+        "punctuated_lines": true
+      }
+    },
+    {
+      "id": "p49-poem-lines-split-and-punctuated",
+      "status": "proposed",
+      "pages": [49],
+      "feedback_summary": "诗句必须逐句拆分并添加现代标点。",
+      "selector": { "first_line": "望見鄉山一抹青" },
+      "expect": {
+        "count": 1,
+        "line_count": 4,
+        "characters_per_line": 7,
+        "unique_lines": true,
+        "punctuated_lines": true
+      }
+    },
+    {
+      "id": "p51-pailu-one-line-per-sentence",
+      "status": "proposed",
+      "pages": [51, 52, 53, 54],
+      "feedback_summary": "排律一句一个数组元素，并保持偶数句，展示层再按两句成联。",
+      "selector": { "title": "鰥緒" },
+      "expect": {
+        "count": 1,
+        "characters_per_line": 5,
+        "unique_lines": true,
+        "punctuated_lines": true,
+        "even_line_count": true
+      }
     }
   ]
 }

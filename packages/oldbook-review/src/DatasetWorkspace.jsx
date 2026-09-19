@@ -1,9 +1,9 @@
 import React from "react";
 import { FileText, Image as ImageIcon, Link2 } from "lucide-react";
-import { displayedNoteText, displayedSeriesTitle, seriesOrdinal } from "./ebook-format.js";
+import { displayedNoteText, displayedSeriesTitle, poemParagraphs, seriesOrdinal } from "./ebook-format.js";
 
 const SOURCE_LABELS = { "paddleocr-vl": "PaddleOCR-VL", "pp-ocrv6": "PP-OCRv6" };
-const pageLabel = (number) => `P${String(number).padStart(3, "0")}`;
+const pageLabel = (number) => Number.isInteger(number) && number > 0 ? `P${String(number).padStart(3, "0")}` : "未定位";
 
 function splitProse(value) {
   return String(value || "").split(/\n\s*\n/)
@@ -12,7 +12,7 @@ function splitProse(value) {
 }
 
 function textForRegion(region) { return region.reading_text || region.edited_text || region.raw_text || ""; }
-function firstPage(entry) { return entry.source_pages?.[0] || 0; }
+function firstPage(entry) { return entry.source_pages?.[0] || null; }
 function entryLabel(entry) {
   if (entry.series?.title) return `${displayedSeriesTitle(entry.series.title)} ${seriesOrdinal(entry.series.index)}`.trim();
   return entry.title || entry.lines?.[0] || entry.prose?.slice(0, 16) || entry.id;
@@ -30,24 +30,28 @@ function findCurrent(container, selector, offset = 80) {
 }
 
 function PageRail({ pages, activePage, onSelect }) {
+  const activeRef = React.useRef(null);
+  React.useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest" }); }, [activePage]);
   return <nav className="dataset-page-rail" aria-label="页面目录">
     <div className="rail-heading"><ImageIcon size={15} /><span>页面</span></div>
-    <div className="rail-scroll">{pages.map((page) => <button key={page.id} className={page.page_number === activePage ? "is-active" : ""} aria-current={page.page_number === activePage ? "page" : undefined} onClick={() => onSelect(page.page_number)}><img src={`/${page.image_path}`} alt="" loading="lazy" /><span>{pageLabel(page.page_number)}</span></button>)}</div>
+    <div className="rail-scroll">{pages.map((page) => <button key={page.id} ref={page.page_number === activePage ? activeRef : null} className={page.page_number === activePage ? "is-active" : ""} aria-current={page.page_number === activePage ? "page" : undefined} onClick={() => onSelect(page.page_number)}><img src={`/${page.image_path}`} alt="" loading={page.page_number === activePage ? "eager" : "lazy"} /><span>{pageLabel(page.page_number)}</span></button>)}</div>
   </nav>;
 }
 
 function StructureRail({ entries, activeEntry, onSelect }) {
+  const activeRef = React.useRef(null);
+  React.useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest" }); }, [activeEntry]);
   return <nav className="dataset-structure-rail" aria-label="正文目录">
     <div className="rail-heading"><FileText size={15} /><span>结构</span></div>
-    <div className="rail-scroll">{entries.map((entry) => <button key={entry.id} className={entry.id === activeEntry ? "is-active" : ""} aria-current={entry.id === activeEntry ? "location" : undefined} onClick={() => onSelect(entry)}><small>{pageLabel(firstPage(entry))}</small><span>{entryLabel(entry)}</span></button>)}</div>
+    <div className="rail-scroll">{entries.map((entry) => <button key={entry.id} ref={entry.id === activeEntry ? activeRef : null} className={entry.id === activeEntry ? "is-active" : ""} aria-current={entry.id === activeEntry ? "location" : undefined} onClick={() => onSelect(entry)}><small>{pageLabel(firstPage(entry))}</small><span>{entryLabel(entry)}</span></button>)}</div>
   </nav>;
 }
 
-function PageImage({ result, page, relatedRegions, onRegionEnter, onRegionLeave, onRegionClick }) {
+function PageImage({ result, page, priority, relatedRegions, onRegionEnter, onRegionLeave, onRegionClick }) {
   const resultPage = result?.pages.find((item) => item.page_number === page.page_number);
   if (!resultPage) return null;
   return <div className="source-image-wrap">
-    <img src={resultPage.image_url || `/${resultPage.image_path}`} alt={`${pageLabel(page.page_number)} 校正页`} loading="lazy" />
+    <img src={resultPage.image_url || `/${resultPage.image_path}`} alt={`${pageLabel(page.page_number)} 校正页`} loading={priority ? "eager" : "lazy"} />
     <div className="source-boxes" aria-hidden="true">{resultPage.regions.map((region) => {
       const key = `${result.id}/${resultPage.id}/${region.id}`;
       const [x, y, width, height] = region.bbox || [0, 0, 0, 0];
@@ -83,7 +87,7 @@ function EvidencePane({ pages, results, links, activePage, relatedRegions, onPag
     <div className="pane-title"><div><span>原页与 OCR</span><small>双模型识别证据</small></div><b>{pageLabel(activePage)}</b></div>
     {pages.map((page) => <article className="evidence-page" id={`source-page-${page.page_number}`} data-page-section={page.page_number} key={page.id}>
       <div className="evidence-page-heading"><h2>{pageLabel(page.page_number)}</h2><span>卷 {page.volume} · 原第 {page.source_page} 页</span></div>
-      <div className="evidence-page-grid"><PageImage result={results[0]} page={page} relatedRegions={relatedRegions} onRegionEnter={onRegionEnter} onRegionLeave={onRegionLeave} onRegionClick={onRegionClick} /><div className="ocr-source-columns">{results.map((result) => <OcrSource key={result.id} result={result} pageNumber={page.page_number} links={links} relatedRegions={relatedRegions} onRegionEnter={onRegionEnter} onRegionLeave={onRegionLeave} onRegionClick={onRegionClick} />)}</div></div>
+      <div className="evidence-page-grid"><PageImage result={results[0]} page={page} priority={page.page_number === activePage} relatedRegions={relatedRegions} onRegionEnter={onRegionEnter} onRegionLeave={onRegionLeave} onRegionClick={onRegionClick} /><div className="ocr-source-columns">{results.map((result) => <OcrSource key={result.id} result={result} pageNumber={page.page_number} links={links} relatedRegions={relatedRegions} onRegionEnter={onRegionEnter} onRegionLeave={onRegionLeave} onRegionClick={onRegionClick} />)}</div></div>
     </article>)}
   </section>;
 }
@@ -102,7 +106,7 @@ function EditionEntry({ entry, relatedTargets, onTargetEnter, onTargetLeave }) {
     {entry.title ? (heading ? <h2><Target id={target("title")} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{entry.title}</Target></h2> : <h3><Target id={target("title")} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{entry.title}</Target></h3>) : null}
     {entry.subtitle ? <p className="entry-subtitle"><Target id={target("subtitle")} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{entry.subtitle}</Target></p> : null}
     {entry.author ? <p className="entry-author"><Target id={target("author")} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{entry.author}</Target></p> : null}
-    {entry.lines?.length ? <div className="entry-lines">{entry.lines.map((line, index) => <p key={index}><Target id={target("line", index + 1)} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{line}</Target></p>)}</div> : null}
+    {entry.lines?.length ? <div className="entry-lines">{poemParagraphs(entry.lines, entry.form).map((lines, index) => <p key={index}>{lines.map((item) => <Target key={item.line} id={target("line", item.line)} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{item.text}</Target>)}</p>)}</div> : null}
     {prose.length ? <div className="entry-prose">{prose.map((text, index) => <Target key={index} id={target("prose", index + 1)} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{text}</Target>)}</div> : null}
     {entry.notes?.length ? <ol className="entry-notes">{entry.notes.map((note, index) => <li key={index}><Target id={target("note", index + 1)} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{displayedNoteText(note.text)}</Target></li>)}</ol> : null}
   </article>;
@@ -121,9 +125,11 @@ function EditionPane({ entries, activeEntry, relatedTargets, onEntryVisible, onT
   return <section className="dataset-edition-pane" ref={paneRef} aria-label="现代阅读版"><div className="pane-title"><div><span>现代阅读版</span><small>已接受结构结果</small></div><b>{entries.find((entry) => entry.id === activeEntry)?.source_pages?.map(pageLabel).join("–") || ""}</b></div><div className="edition-paper">{entries.map((entry) => <EditionEntry key={entry.id} entry={entry} relatedTargets={relatedTargets} onTargetEnter={onTargetEnter} onTargetLeave={onTargetLeave} />)}</div></section>;
 }
 
-export default function DatasetWorkspace({ data }) {
-  const pages = React.useMemo(() => [...(data.project?.source?.pages || data.results?.[0]?.pages || [])].sort((a, b) => a.page_number - b.page_number), [data]);
-  const entries = React.useMemo(() => [...(data.ebook?.entries || [])].sort((a, b) => firstPage(a) - firstPage(b)), [data]);
+export default function DatasetWorkspace({ data, onPageRequest = null }) {
+  const allPages = React.useMemo(() => [...(data.project?.source?.pages || data.results?.[0]?.pages || [])].sort((a, b) => a.page_number - b.page_number), [data]);
+  const loadedPageNumbers = React.useMemo(() => new Set((data.results?.[0]?.pages || []).map((page) => page.page_number)), [data.results]);
+  const pages = React.useMemo(() => allPages.filter((page) => loadedPageNumbers.has(page.page_number)), [allPages, loadedPageNumbers]);
+  const entries = React.useMemo(() => [...(data.ebook?.entries || [])].sort((a, b) => (firstPage(a) ?? Number.MAX_SAFE_INTEGER) - (firstPage(b) ?? Number.MAX_SAFE_INTEGER)), [data]);
   const [activePage, setActivePage] = React.useState(pages[0]?.page_number || 0);
   const [activeEntry, setActiveEntry] = React.useState(entries[0]?.id || "");
   const [hoveredRegion, setHoveredRegion] = React.useState("");
@@ -132,14 +138,17 @@ export default function DatasetWorkspace({ data }) {
   const relatedTargets = React.useMemo(() => new Set(hoveredRegion ? data.links.by_region?.[hoveredRegion] || [] : []), [data.links, hoveredRegion]);
   const relatedRegions = React.useMemo(() => new Set(hoveredTarget ? (data.links.by_target?.[hoveredTarget] || []).map((source) => source.region_key) : hoveredRegion ? [hoveredRegion] : []), [data.links, hoveredRegion, hoveredTarget]);
 
-  const scrollPage = React.useCallback((pageNumber, alignEdition = true) => {
-    document.getElementById(`source-page-${pageNumber}`)?.scrollIntoView({ behavior: "auto", block: "start" });
+  const scrollPage = React.useCallback(async (pageNumber, alignEdition = true) => {
     setActivePage(pageNumber);
+    if (!loadedPageNumbers.has(pageNumber) && onPageRequest) await onPageRequest(pageNumber);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.getElementById(`source-page-${pageNumber}`)?.scrollIntoView({ behavior: "auto", block: "start" });
+    }));
     if (alignEdition) {
       const entry = entries.find((item) => item.source_pages?.includes(pageNumber));
       if (entry) { document.getElementById(`edition-entry-${entry.id}`)?.scrollIntoView({ behavior: "auto", block: "start" }); setActiveEntry(entry.id); }
     }
-  }, [entries]);
+  }, [entries, loadedPageNumbers, onPageRequest]);
   const scrollEntry = React.useCallback((entry) => {
     document.getElementById(`edition-entry-${entry.id}`)?.scrollIntoView({ behavior: "auto", block: "start" });
     setActiveEntry(entry.id);
@@ -152,7 +161,17 @@ export default function DatasetWorkspace({ data }) {
     const entry = entries.find((item) => item.source_pages?.includes(pageNumber));
     if (entry) scrollEntry(entry);
   }, [data.links, entries, scrollEntry]);
-  const pageVisible = React.useCallback((number) => setActivePage(number), []);
+  const pageVisible = React.useCallback((number) => {
+    setActivePage(number);
+    if (!onPageRequest) return;
+    const loadedIndex = pages.findIndex((page) => page.page_number === number);
+    const allIndex = allPages.findIndex((page) => page.page_number === number);
+    if (loadedIndex >= pages.length - 2 && allIndex < allPages.length - 1) {
+      onPageRequest(allPages[Math.min(allPages.length - 1, allIndex + 2)].page_number);
+    } else if (loadedIndex <= 1 && allIndex > 0) {
+      onPageRequest(allPages[Math.max(0, allIndex - 2)].page_number);
+    }
+  }, [allPages, onPageRequest, pages]);
   const entryVisible = React.useCallback((id) => setActiveEntry(id), []);
   const regionEnter = React.useCallback((key) => setHoveredRegion(key), []);
   const regionLeave = React.useCallback(() => setHoveredRegion(""), []);
@@ -160,7 +179,7 @@ export default function DatasetWorkspace({ data }) {
   const targetLeave = React.useCallback(() => setHoveredTarget(""), []);
 
   return <div className={`dataset-workspace ${hasEdition ? "has-edition" : "without-edition"}`}>
-    <PageRail pages={pages} activePage={activePage} onSelect={scrollPage} />
+    <PageRail pages={allPages} activePage={activePage} onSelect={scrollPage} />
     <EvidencePane pages={pages} results={data.results || []} links={data.links} activePage={activePage} relatedRegions={relatedRegions} onPageVisible={pageVisible} onRegionEnter={regionEnter} onRegionLeave={regionLeave} onRegionClick={jumpFromRegion} />
     {hasEdition ? <EditionPane entries={entries} activeEntry={activeEntry} relatedTargets={relatedTargets} onEntryVisible={entryVisible} onTargetEnter={targetEnter} onTargetLeave={targetLeave} /> : null}
     {hasEdition ? <StructureRail entries={entries} activeEntry={activeEntry} onSelect={scrollEntry} /> : null}

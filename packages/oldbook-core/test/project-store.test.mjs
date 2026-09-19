@@ -41,6 +41,16 @@ test("known legacy model is retained", async t => {
   assert.equal(view.results[0].archived, false);
 });
 
+test("project archive state can change without rewriting OCR results", async t => {
+  const store = await fixture(t);
+  const original = result("vl", [page("page-001", "vl")]);
+  await store.importResult("book", { title: "Book", result: original });
+  const resultBefore = await store.json(store.resultPath("book", "vl"));
+  assert.equal((await store.setArchived("book", true)).archived, true);
+  assert.equal((await store.setArchived("book", false)).archived, false);
+  assert.deepEqual(await store.json(store.resultPath("book", "vl")), resultBefore);
+});
+
 test("switch saves edits, deletions and image geometry only to their own model", async t => {
   const store = await fixture(t);
   const vl = page("page-001", "vl");
@@ -81,4 +91,26 @@ test("batch imports and editor saves serialize; resume cannot overwrite correcte
   assert.equal(view.pages[1].regions[0].raw_text, "recognized");
   assert.equal((await store.importPage("book", "vl", first)).skipped, true);
   assert.deepEqual((await store.view("book")).pages[0].regions, []);
+});
+
+test("reader windows return lightweight page summaries and invalidate edited result cache", async t => {
+  const store = await fixture(t);
+  const pages = [
+    page("page-001", "one"),
+    page("page-002", "two", { page_number: 2 }),
+    page("page-003", "three", { page_number: 3 })
+  ];
+  await store.importResult("book", { title: "Book", result: result("vl", pages) });
+
+  const first = await store.readerWindow("book", 2, 2);
+  assert.equal(first.project.source.pages.length, 3);
+  assert.equal(first.project.source.pages[1].regions, undefined);
+  assert.deepEqual(first.results[0].pages.map(item => item.page_number), [2]);
+
+  await store.save("book", {
+    active_result_id: "vl",
+    pages: [{ ...pages[1], regions: [{ ...pages[1].regions[0], edited_text: "corrected" }] }]
+  });
+  const refreshed = await store.readerWindow("book", 2, 2);
+  assert.equal(refreshed.results[0].pages[0].regions[0].edited_text, "corrected");
 });

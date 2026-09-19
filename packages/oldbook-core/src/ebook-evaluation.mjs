@@ -34,6 +34,8 @@ export function validateCases(suite, projectId) {
             (n.position.field === "lines" && (!Number.isInteger(n.position.line) || n.position.line < 1)))) {
           throw new Error("Invalid note anchor assertion");
         }
+      } else if (["unique_lines", "punctuated_lines", "even_line_count", "title_differs_from_first_line"].includes(key)) {
+        if (value !== true) throw new Error(`Invalid expectation: ${key}`);
       } else throw new Error(`Unsupported expectation: ${key}`);
     }
   }
@@ -139,6 +141,15 @@ export function evaluateCandidate(baseline, candidate, task, suite = null) {
         if (key === "series_indices") check(isDeepStrictEqual(found.map(e => e.series?.index), expected), key);
         if (key === "series_total") check(found.every(e => e.series?.total === expected), key);
         if (key === "contains_lines") check(expected.every(s => found.some(e => e.lines.some(l => textCharacters(l) === textCharacters(s)))), key);
+        if (key === "unique_lines") check(found.every(e => {
+          const lines = e.lines.filter(s => textCharacters(s)).map(textCharacters);
+          return new Set(lines).size === lines.length;
+        }), key);
+        if (key === "punctuated_lines") check(found.every(e => e.lines.filter(s => textCharacters(s))
+          .every(s => /[，。！？；：][”’」』]*$/u.test(s.trim()))), key);
+        if (key === "even_line_count") check(found.every(e => e.lines.filter(s => textCharacters(s)).length % 2 === 0), key);
+        if (key === "title_differs_from_first_line") check(found.every(e =>
+          !e.title || textCharacters(e.title) !== textCharacters(e.lines.find(s => textCharacters(s)) || "")), key);
         if (key === "note_anchors") check(expected.every(n => found.some(e => e.notes.some(note =>
           note.text.includes(n.text_includes) && isDeepStrictEqual(note.position, n.position)))), key);
       }
