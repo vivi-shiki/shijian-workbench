@@ -34,7 +34,10 @@ function PageRail({ pages, activePage, onSelect }) {
   React.useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest" }); }, [activePage]);
   return <nav className="dataset-page-rail" aria-label="页面目录">
     <div className="rail-heading"><ImageIcon size={15} /><span>页面</span></div>
-    <div className="rail-scroll">{pages.map((page) => <button key={page.id} ref={page.page_number === activePage ? activeRef : null} className={page.page_number === activePage ? "is-active" : ""} aria-current={page.page_number === activePage ? "page" : undefined} onClick={() => onSelect(page.page_number)}><img src={`/${page.image_path}`} alt="" loading={page.page_number === activePage ? "eager" : "lazy"} /><span>{pageLabel(page.page_number)}</span></button>)}</div>
+    <div className="rail-scroll">{pages.map((page) => {
+      const nearby = Math.abs(page.page_number - activePage) <= 2;
+      return <button key={page.id} ref={page.page_number === activePage ? activeRef : null} className={page.page_number === activePage ? "is-active" : ""} aria-current={page.page_number === activePage ? "page" : undefined} onClick={() => onSelect(page.page_number)}><span className="rail-page-thumb">{nearby ? <img src={page.image_url || `/${page.image_path}`} alt="" loading={page.page_number === activePage ? "eager" : "lazy"} /> : null}</span><span>{pageLabel(page.page_number)}</span></button>;
+    })}</div>
   </nav>;
 }
 

@@ -83,10 +83,11 @@ function App() {
     const cached = scope === "live" ? liveCacheRef.current.get(projectId) : null;
     setData(cached || null);
     const firstPage = project?.page_range?.start || 1;
+    const initialPage = Math.min(firstPage + WINDOW_RADIUS, project?.page_range?.end || firstPage + WINDOW_RADIUS);
     const request = scope === "live" && cached
       ? Promise.resolve(cached)
       : scope === "live"
-        ? loadLiveProject(projectId, firstPage, controller.signal)
+        ? loadLiveProject(projectId, initialPage, controller.signal)
         : fetchJson(`/api/projects/${projectId}/datasets/${encodeURIComponent(scope.slice("dataset:".length))}`, controller.signal);
     request
       .then((payload) => {
@@ -98,7 +99,6 @@ function App() {
   }, [projectId, projects, scope, scopeProjectId]);
 
   const loadLivePage = React.useCallback((pageNumber) => {
-    if (scope !== "live") return Promise.resolve();
     const cached = liveCacheRef.current.get(projectId);
     const alreadyLoaded = cached?.results?.length && cached.results.every((result) =>
       result.pages?.some((page) => page.page_number === pageNumber));
@@ -118,7 +118,7 @@ function App() {
       .finally(() => liveRequestsRef.current.delete(requestKey));
     liveRequestsRef.current.set(requestKey, request);
     return request;
-  }, [projectId, scope]);
+  }, [projectId]);
 
   const selectedProject = projects.find((item) => item.id === projectId);
   const livePageCount = selectedProject?.pages || data?.results?.[0]?.pages?.length || 0;
@@ -150,7 +150,7 @@ function App() {
         </div>
       </header>
       {error ? <div className="reader-error" role="alert">{error}</div> : null}
-      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={scope === "live" ? loadLivePage : null} /> : <div className="reader-loading">正在读取对照资料…</div>}
+      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} /> : <div className="reader-loading">正在读取对照资料…</div>}
     </main>
   );
 }
