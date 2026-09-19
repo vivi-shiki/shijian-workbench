@@ -219,6 +219,7 @@ app.get("/api/projects/:projectId/reader", async (req, res) => {
       approval: null,
       links: { summary: {}, links: [], by_target: {}, by_region: {} },
       ebook: ebookPayload.document,
+      model_config: ebookPayload.config,
       ...reader
     });
   } catch (error) {
@@ -295,6 +296,14 @@ app.put("/api/projects/:projectId/ebook", async (req, res) => {
 
 app.post("/api/projects/:projectId/ebook/run", async (req, res) => {
   res.json(await ebookStore.run(safeProjectId(req.params.projectId), req.body));
+});
+
+app.post("/api/projects/:projectId/ebook/revise-page", async (req, res) => {
+  res.json(await ebookStore.revisePage(safeProjectId(req.params.projectId), req.body));
+});
+
+app.post("/api/projects/:projectId/ebook/revise-page/:runId/apply", async (req, res) => {
+  res.json(await ebookStore.applyPageRevision(safeProjectId(req.params.projectId), req.params.runId, req.body));
 });
 
 app.post("/api/projects/:projectId/ebook/candidates/:runId/apply", async (req, res) => {

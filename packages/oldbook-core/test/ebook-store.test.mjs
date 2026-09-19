@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildClassicPoetryPrompt, buildClassicRetryPrompt, buildEbookPrompt, emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, trimClassicContextOutput, validateEbook, validationDiagnosticsToIssues } from "../src/ebook-store.mjs";
+import { applyManualPageRevision, buildClassicPoetryPrompt, buildClassicRetryPrompt, buildEbookPrompt, emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, trimClassicContextOutput, validateEbook, validationDiagnosticsToIssues, warningOnlyGenerationPolicy } from "../src/ebook-store.mjs";
 import { validateGeneratedChunk, validateGeneratedDocument } from "../src/ebook-generation-validation.mjs";
 
 const project = { id: "book", title: "Book", results: [{ page_count: 30 }] };
@@ -58,6 +58,69 @@ test("classic poetry prompt restores the early generic workflow with full bounda
   assert.doesNotMatch(prompt, /旅夢初囘|自悼|鰥緒|漳南/);
   assert.doesNotMatch(prompt, /当前项目书名/);
   assert.doesNotMatch(prompt, /evidence_refs/);
+});
+
+test("manual page revision prompt puts human instructions last and at highest priority", () => {
+  const prompt = buildClassicPoetryPrompt([
+    { page_number: 9, context_only: true, results: [{ result_id: "ocr", regions: [{ text: "前页" }] }] },
+    { page_number: 10, context_only: false, results: [{ result_id: "ocr", regions: [{ evidence_id: "p10:ocr:r1", text: "本页" }] }] },
+    { page_number: 11, context_only: true, results: [{ result_id: "ocr", regions: [{ text: "后页" }] }] }
+  ], [], {
+    current_entries: [{ id: "entry-0001", kind: "poem", source_pages: [10], lines: ["本页正文。"] }],
+    context_entries: [{ id: "entry-0002", kind: "poem", source_pages: [11], lines: ["后页正文。"] }],
+    manual_prompt: "请重新判断题名与正文边界。"
+  });
+  assert.match(prompt, /单页人工修订模式/);
+  assert.match(prompt, /当前页正式 JSON（允许修订）/);
+  assert.match(prompt, /前后页正式 JSON（只读上下文）/);
+  assert.match(prompt, /人工输入提示词（最高优先级）/);
+  assert.match(prompt, /不得把这段要求原样写入正文或 issues/);
+  assert.ok(prompt.endsWith("请重新判断题名与正文边界。"));
+});
+
+test("manual page revision only updates target entries and target-page evidence", () => {
+  const document = emptyEbook(project);
+  document.entries = [{
+    id: "entry-0001", kind: "poem", title: "旧题", subtitle: "", author: "", form: "七言絕句",
+    heading_level: null, series: null, lines: ["第一句，", "第二句。", "第三句，", "第四句。"], prose: "",
+    notes: [], source_pages: [10], evidence_refs: ["p10:ocr:r1"], confidence: 0.7, review_status: "needs_review"
+  }, {
+    id: "entry-0002", kind: "poem", title: "后页", subtitle: "", author: "", form: "",
+    heading_level: null, series: null, lines: ["后页正文。"], prose: "", notes: [], source_pages: [11],
+    evidence_refs: ["p11:ocr:r1"], confidence: 0.8, review_status: "needs_review"
+  }];
+  const result = applyManualPageRevision(document, { entries: [{
+    id: "entry-0001", title: "新题", source_pages: [10], evidence_refs: ["p10:ocr:r1"]
+  }], delete_entry_ids: [], issues: [] }, { pageNumber: 10, allowedEvidenceRefs: ["p10:ocr:r1"] });
+  assert.equal(result.document.entries[0].title, "新题");
+  assert.equal(result.document.entries[1].title, "后页");
+  assert.equal(document.entries[0].title, "旧题");
+  const outside = applyManualPageRevision(document, { entries: [{
+    id: "entry-0002", title: "越界修改"
+  }] }, { pageNumber: 10, allowedEvidenceRefs: ["p10:ocr:r1"] });
+  assert.equal(outside.document.entries[1].title, "后页");
+  assert.ok(outside.warnings.some(warning => warning.code === "revision_out_of_scope_update_ignored"));
+  const evidence = applyManualPageRevision(document, { entries: [{
+    id: "entry-0001", evidence_refs: ["p11:ocr:r1"]
+  }] }, { pageNumber: 10, allowedEvidenceRefs: ["p10:ocr:r1"] });
+  assert.deepEqual(evidence.document.entries[0].evidence_refs, ["p10:ocr:r1"]);
+  assert.ok(evidence.warnings.some(warning => warning.code === "revision_external_evidence_ignored"));
+  assert.ok(evidence.document.issues.some(issue => issue.description.includes("revision_external_evidence_ignored")));
+});
+
+test("all model generation uses one warning-only attempt", () => {
+  assert.deepEqual(warningOnlyGenerationPolicy(), { validation_mode: "warnings", max_attempts: 1 });
+});
+
+test("invalid continuation is retained as a new entry and warning instead of rejected", () => {
+  const document = emptyEbook(project);
+  const warnings = [];
+  mergeGenerated(document, { entries: [{
+    action: "continue", continuation_of: "entry-missing", kind: "poem", title: "保留候选",
+    lines: ["候选正文。"], source_pages: [10], notes: []
+  }] }, 10, 10, { warningDiagnostics: warnings });
+  assert.equal(document.entries[0].title, "保留候选");
+  assert.ok(warnings.some(warning => warning.code === "invalid_continuation"));
 });
 
 test("classic retry guidance contains only generic diagnostics", () => {

@@ -302,6 +302,7 @@ export class HistoryStore {
     this.projectsRoot = projectsRoot;
     this.locks = new Map();
     this.monitor = null;
+    this.monitorBusy = false;
   }
 
   projectDirectory(projectId) { return path.join(this.projectsRoot, safePart(projectId)); }
@@ -474,9 +475,16 @@ export class HistoryStore {
 
   startMonitoring(intervalMs = 3000) {
     if (this.monitor) return;
-    this.reconcileAll().catch(error => console.error("Initial history reconcile failed:", error.message));
+    const reconcile = async () => {
+      if (this.monitorBusy) return;
+      this.monitorBusy = true;
+      try { await this.reconcileAll(); }
+      catch (error) { console.error("History reconcile failed:", error.message); }
+      finally { this.monitorBusy = false; }
+    };
+    reconcile();
     this.monitor = setInterval(() => {
-      this.reconcileAll().catch(error => console.error("History reconcile failed:", error.message));
+      reconcile();
     }, intervalMs);
     this.monitor.unref?.();
   }

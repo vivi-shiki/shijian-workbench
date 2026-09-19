@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { HistoryStore, diffJson } from "../src/change-history.mjs";
 import { atomicJson } from "../src/project-store.mjs";
@@ -25,6 +26,25 @@ test("identified arrays produce stable entity paths and exact before/after value
     before: "雨集",
     after: "疑雨集"
   }]);
+});
+
+test("history monitoring never overlaps a slow reconciliation pass", async t => {
+  const { history } = await fixture(t);
+  let active = 0;
+  let maximum = 0;
+  let passes = 0;
+  history.reconcileAll = async () => {
+    active += 1;
+    maximum = Math.max(maximum, active);
+    passes += 1;
+    await delay(25);
+    active -= 1;
+  };
+  history.startMonitoring(5);
+  t.after(() => clearInterval(history.monitor));
+  await delay(75);
+  assert.equal(maximum, 1);
+  assert.ok(passes >= 2);
 });
 
 test("human changes update append-only events and AI memory", async t => {

@@ -120,6 +120,34 @@ function App() {
     return request;
   }, [projectId]);
 
+  const reviseLivePage = React.useCallback(async ({ pageNumber, manualPrompt }) => {
+    const response = await fetch(`/api/projects/${projectId}/ebook/revise-page`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page_number: pageNumber, manual_prompt: manualPrompt })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || payload.message || "本页模型修订失败");
+    return payload;
+  }, [projectId]);
+
+  const applyPageRevision = React.useCallback(async (runId) => {
+    const response = await fetch(`/api/projects/${projectId}/ebook/revise-page/${encodeURIComponent(runId)}/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: "在只读校对界面批准单页模型修订候选" })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || payload.message || "单页修订候选应用失败");
+    const current = liveCacheRef.current.get(projectId);
+    if (current) {
+      const updated = { ...current, ebook: payload.document, model_config: payload.config };
+      liveCacheRef.current.set(projectId, updated);
+      if (selectionRef.current === `${projectId}:live`) setData(updated);
+    }
+    return payload;
+  }, [projectId]);
+
   const selectedProject = projects.find((item) => item.id === projectId);
   const livePageCount = selectedProject?.pages || data?.results?.[0]?.pages?.length || 0;
   const livePageRange = selectedProject?.page_range || (livePageCount ? { start: 1, end: livePageCount } : null);
@@ -150,7 +178,7 @@ function App() {
         </div>
       </header>
       {error ? <div className="reader-error" role="alert">{error}</div> : null}
-      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} /> : <div className="reader-loading">正在读取对照资料…</div>}
+      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} onRevisePage={data.manifest ? null : reviseLivePage} onApplyPageRevision={data.manifest ? null : applyPageRevision} /> : <div className="reader-loading">正在读取对照资料…</div>}
     </main>
   );
 }

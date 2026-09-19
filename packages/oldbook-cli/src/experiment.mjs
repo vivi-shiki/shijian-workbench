@@ -147,9 +147,7 @@ async function main() {
           model: options.model || undefined,
           pipeline: options.pipeline || undefined,
           resume_candidate: options["resume-candidate"] !== "false",
-          resume_through: options["resume-through"] ? Number(options["resume-through"]) : undefined,
-          validation_mode: options["validation-mode"] || undefined,
-          max_attempts: options["max-attempts"] ? Number(options["max-attempts"]) : undefined
+          resume_through: options["resume-through"] ? Number(options["resume-through"]) : undefined
         });
         outputs.push({ project_id: variant.id, status: document.generation.status,
           entries: document.entries.length, issues: document.issues.length,
@@ -162,7 +160,7 @@ async function main() {
     if (outputs.some((output) => output.status !== "complete")) process.exitCode = 1;
     return;
   }
-  throw new Error("Usage: experiment.mjs prepare-ocr-comparison|archive-ocr-comparison|run-ocr-comparison --from <page> --to <page> [--source-project <id>] [--version <id>] [--variant <project-id>] [--chunk-size <pages>] [--model <model-id>] [--pipeline <pipeline-id>] [--resume-through <page>] [--validation-mode strict|warnings] [--max-attempts 1-3]");
+  throw new Error("Usage: experiment.mjs prepare-ocr-comparison|archive-ocr-comparison|run-ocr-comparison --from <page> --to <page> [--source-project <id>] [--version <id>] [--variant <project-id>] [--chunk-size <pages>] [--model <model-id>] [--pipeline <pipeline-id>] [--resume-through <page>]");
 }
 
 main().catch((error) => { console.error(error.message); process.exitCode = 1; });

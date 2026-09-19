@@ -314,7 +314,9 @@ export default function EbookWorkspace({ project }) {
           start_page: startPage,
           end_page: endPage,
           model,
-          force: forceRun
+          force: forceRun,
+          validation_mode: "warnings",
+          max_attempts: 1
         })
       });
       const payload = await response.json();

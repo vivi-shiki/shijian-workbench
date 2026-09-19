@@ -28,25 +28,12 @@ const DEFAULT_CONTEXT_OVERLAP = 1;
 const TRI_PASS_PIPELINE = "tri-pass-regions-v1";
 const CLASSIC_POETRY_PIPELINE = "classic-poetry-v1";
 const CLASSIC_POETRY_MODEL = "deepseek-ai/DeepSeek-V4-Flash";
-const CLASSIC_HARD_DIAGNOSTICS = new Set([
-  "context_leak",
-  "duplicate_entry",
-  "duplicate_line",
-  "duplicate_line_run",
-  "continuation_overlap",
-  "empty_source",
-  "invalid_action",
-  "invalid_continuation",
-  "invalid_entry",
-  "missing_line_punctuation",
-  "regulated_verse_line_count",
-  "regulated_verse_line_width",
-  "regulated_verse_pairing",
-  "title_matches_first_line"
-]);
-
 function now() {
   return new Date().toISOString();
+}
+
+export function warningOnlyGenerationPolicy() {
+  return { validation_mode: "warnings", max_attempts: 1 };
 }
 
 function asText(value) {
@@ -67,6 +54,26 @@ export function validationDiagnosticsToIssues(diagnostics, pageStart, pageEnd) {
       candidates: []
     };
   });
+}
+
+function appendValidationIssues(document, diagnostics, pageStart, pageEnd) {
+  const existing = new Set((document.issues || []).map(issue =>
+    `${(issue.source_pages || []).join(",")}:${asText(issue.description)}`));
+  const ids = new Set((document.issues || []).map(issue => issue.id));
+  const addedIds = [];
+  let nextIssue = 1;
+  for (const issue of validationDiagnosticsToIssues(diagnostics, pageStart, pageEnd)) {
+    const key = `${issue.source_pages.join(",")}:${issue.description}`;
+    if (existing.has(key)) continue;
+    while (ids.has(`issue-${String(nextIssue).padStart(4, "0")}`)) nextIssue += 1;
+    const id = `issue-${String(nextIssue).padStart(4, "0")}`;
+    nextIssue += 1;
+    ids.add(id);
+    existing.add(key);
+    document.issues.push({ id, ...issue, resolved: false });
+    addedIds.push(id);
+  }
+  return addedIds;
 }
 
 function uniqueNumbers(values, min = 1, max = Number.MAX_SAFE_INTEGER) {
@@ -298,9 +305,12 @@ export function mergeGenerated(document, payload, pageStart, pageEnd, options = 
     };
     normalized.notes = normalizeGeneratedNotes(raw.notes, normalized);
 
-    const target = continuation && document.entries.find(entry => entry.id === continuation);
+    let target = continuation && document.entries.find(entry => entry.id === continuation);
     if (continuation && (!target || !allowedContinuations.has(continuation))) {
-      throw Object.assign(new Error(`无效的 continuation_of：${continuation}`), { status: 422 });
+      options.warningDiagnostics?.push({ code: "invalid_continuation",
+        message: `无效的 continuation_of 已按新条目保留：${continuation}`,
+        source_pages: sourcePages.length ? sourcePages : [pageStart] });
+      target = null;
     }
     let targetId;
     if (target) {
@@ -361,6 +371,162 @@ export function mergeGenerated(document, payload, pageStart, pageEnd, options = 
   return document;
 }
 
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value || {}, key);
+}
+
+function manualRevisionEntry(raw, existing, pageNumber, allowedEvidenceRefs, usedIds, warnings) {
+  let sourcePages = uniqueNumbers(hasOwn(raw, "source_pages") ? raw.source_pages : existing?.source_pages);
+  if (existing) {
+    const allowedPages = new Set([...(existing.source_pages || []), pageNumber]);
+    if (sourcePages.some(page => !allowedPages.has(page))) {
+      warnings.push({ code: "revision_context_page_ignored",
+        message: `条目 ${existing.id} 新增的上下文页已忽略`, source_pages: [pageNumber] });
+      sourcePages = sourcePages.filter(page => allowedPages.has(page));
+    }
+  } else if (sourcePages.some(page => page !== pageNumber)) {
+    warnings.push({ code: "revision_context_page_ignored",
+      message: "新条目引用的目标页外页码已忽略", source_pages: [pageNumber] });
+    sourcePages = sourcePages.filter(page => page === pageNumber);
+  }
+
+  const id = existing?.id || nextEntryId([...usedIds].map(value => ({ id: value })));
+  usedIds.add(id);
+  const lines = hasOwn(raw, "lines") ? normalizeLines(raw.lines) : [...(existing?.lines || [])];
+  const title = hasOwn(raw, "title") ? asText(raw.title) : asText(existing?.title);
+  const series = hasOwn(raw, "series") ? normalizeSeries(raw.series) : normalizeSeries(existing?.series);
+  const normalized = {
+    ...(existing || {}),
+    id,
+    kind: ENTRY_KINDS.has(raw.kind) ? raw.kind : existing?.kind || "other",
+    title,
+    subtitle: hasOwn(raw, "subtitle") ? asText(raw.subtitle) : asText(existing?.subtitle),
+    author: hasOwn(raw, "author") ? asText(raw.author) : asText(existing?.author),
+    form: hasOwn(raw, "form") ? asText(raw.form) : asText(existing?.form),
+    heading_level: hasOwn(raw, "heading_level") ? normalizeHeadingLevel(raw.heading_level) : normalizeHeadingLevel(existing?.heading_level),
+    series,
+    lines,
+    prose: hasOwn(raw, "prose") ? asText(raw.prose) : asText(existing?.prose),
+    notes: [],
+    source_pages: sourcePages.length ? sourcePages : existing?.source_pages?.length ? [...existing.source_pages] : [pageNumber],
+    confidence: Math.max(0, Math.min(1, Number(hasOwn(raw, "confidence") ? raw.confidence : existing?.confidence) || 0)),
+    review_status: "needs_review",
+    boundary_state: hasOwn(raw, "boundary_state") ? asText(raw.boundary_state) || "closed" : asText(existing?.boundary_state) || "closed"
+  };
+  normalized.notes = hasOwn(raw, "notes")
+    ? normalizeGeneratedNotes(raw.notes, normalized)
+    : structuredClone(existing?.notes || []);
+
+  const requestedRefs = [...new Set((Array.isArray(raw.evidence_refs) ? raw.evidence_refs : []).map(asText).filter(Boolean))];
+  const invalidRefs = requestedRefs.filter(reference => !allowedEvidenceRefs.has(reference));
+  if (invalidRefs.length) {
+    warnings.push({ code: "revision_external_evidence_ignored",
+      message: `当前页之外的证据引用已忽略：${invalidRefs.slice(0, 3).join(", ")}`,
+      source_pages: [pageNumber] });
+  }
+  const validRefs = requestedRefs.filter(reference => allowedEvidenceRefs.has(reference));
+  normalized.evidence_refs = validRefs.length
+    ? validRefs
+    : existing?.evidence_refs?.length ? [...existing.evidence_refs] : [...allowedEvidenceRefs];
+  return normalized;
+}
+
+export function applyManualPageRevision(document, payload, { pageNumber, allowedEvidenceRefs = [] }) {
+  if (!document || !Array.isArray(document.entries) || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      document: structuredClone(document), updated_entry_ids: [], created_entry_ids: [],
+      deleted_entry_ids: [], added_issue_ids: [],
+      warnings: [{ code: "invalid_revision_payload", message: "单页修订候选格式无效", source_pages: [pageNumber] }]
+    };
+  }
+  const revised = structuredClone(document);
+  const warnings = [];
+  const editable = new Map(revised.entries
+    .filter(entry => entry.source_pages?.includes(pageNumber))
+    .map(entry => [entry.id, entry]));
+  const requestedDeleteIds = [...new Set((Array.isArray(payload.delete_entry_ids) ? payload.delete_entry_ids : [])
+    .map(asText).filter(Boolean))];
+  const deleteIds = new Set();
+  for (const id of requestedDeleteIds) {
+    if (editable.has(id)) deleteIds.add(id);
+    else warnings.push({ code: "revision_out_of_scope_delete_ignored",
+      message: `当前页之外的删除请求已忽略：${id}`, source_pages: [pageNumber] });
+  }
+
+  const targetRefs = new Set(allowedEvidenceRefs.map(asText).filter(Boolean));
+  const usedIds = new Set(revised.entries.map(entry => entry.id));
+  const updates = new Map();
+  const created = [];
+  for (const raw of Array.isArray(payload.entries) ? payload.entries : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const requestedId = asText(raw.id);
+    if (requestedId && !editable.has(requestedId)) {
+      warnings.push({ code: "revision_out_of_scope_update_ignored",
+        message: `当前页之外的修改请求已忽略：${requestedId}`, source_pages: [pageNumber] });
+      continue;
+    }
+    if (requestedId && updates.has(requestedId)) {
+      warnings.push({ code: "revision_duplicate_update_ignored",
+        message: `同一条目的重复修改已忽略：${requestedId}`, source_pages: [pageNumber] });
+      continue;
+    }
+    if (requestedId && deleteIds.has(requestedId)) {
+      deleteIds.delete(requestedId);
+      warnings.push({ code: "revision_delete_update_conflict",
+        message: `条目 ${requestedId} 同时请求修改和删除，已保留修改`, source_pages: [pageNumber] });
+    }
+    const existing = requestedId ? editable.get(requestedId) : null;
+    const allowedRefs = new Set([...targetRefs, ...(existing?.evidence_refs || [])]);
+    const normalized = manualRevisionEntry(raw, existing,
+      pageNumber, allowedRefs, usedIds, warnings);
+    if (requestedId) updates.set(requestedId, normalized);
+    else created.push(normalized);
+  }
+
+  const lastEditableIndex = revised.entries.reduce((last, entry, index) => editable.has(entry.id) ? index : last, -1);
+  const outputEntries = [];
+  revised.entries.forEach((entry, index) => {
+    if (!deleteIds.has(entry.id)) outputEntries.push(updates.get(entry.id) || entry);
+    if (index === lastEditableIndex) outputEntries.push(...created);
+  });
+  if (lastEditableIndex < 0 && created.length) {
+    const insertion = outputEntries.findIndex(entry => Math.min(...(entry.source_pages || [Number.MAX_SAFE_INTEGER])) > pageNumber);
+    if (insertion < 0) outputEntries.push(...created);
+    else outputEntries.splice(insertion, 0, ...created);
+  }
+  revised.entries = outputEntries;
+
+  const addedIssues = [];
+  const issueIds = new Set(revised.issues.map(issue => issue.id));
+  let nextIssue = 1;
+  for (const raw of Array.isArray(payload.issues) ? payload.issues : []) {
+    if (!raw || !asText(raw.description)) continue;
+    while (issueIds.has(`issue-${String(nextIssue).padStart(4, "0")}`)) nextIssue += 1;
+    const issueId = `issue-${String(nextIssue).padStart(4, "0")}`;
+    issueIds.add(issueId);
+    nextIssue += 1;
+    const issue = {
+      id: issueId,
+      source_pages: [pageNumber],
+      description: asText(raw.description),
+      candidates: (Array.isArray(raw.candidates) ? raw.candidates : []).map(asText).filter(Boolean),
+      resolved: false
+    };
+    revised.issues.push(issue);
+    addedIssues.push(issue.id);
+  }
+  const warningIssueIds = appendValidationIssues(revised, warnings, pageNumber, pageNumber);
+  validateEbook(revised, revised.project_id);
+  return {
+    document: revised,
+    updated_entry_ids: [...updates.keys()],
+    created_entry_ids: created.map(entry => entry.id),
+    deleted_entry_ids: [...deleteIds],
+    added_issue_ids: [...addedIssues, ...warningIssueIds],
+    warnings
+  };
+}
+
 function regionText(region) {
   return asText(region?.edited_text ?? region?.raw_text ?? "");
 }
@@ -401,8 +567,31 @@ export function buildEbookRules() {
   ];
 }
 
-export function buildClassicPoetryPrompt(pageBundles, previousEntries) {
-  const expected = {
+export function buildClassicPoetryPrompt(pageBundles, previousEntries, options = {}) {
+  const manualPrompt = asText(options.manual_prompt);
+  const revisionEntries = Array.isArray(options.current_entries) ? options.current_entries : null;
+  const revisionContext = Array.isArray(options.context_entries) ? options.context_entries : [];
+  const expected = revisionEntries ? {
+    entries: [{
+      id: "已有条目必须填写原 id；新条目留空",
+      kind: "heading|book_text|biography|poem|preface|note|colophon|other",
+      title: "",
+      subtitle: "",
+      author: "",
+      form: "",
+      heading_level: "目录层级 1-6；1 最高，非目录标题时为 null",
+      series: { title: "组诗总题；非组诗时为 null", index: 1, total: 6 },
+      lines: ["诗词逐句；非诗词为空数组"],
+      prose: "序跋等散文；诗词为空字符串",
+      notes: [{ position: { field: "lines", line: 1, offset: 7 }, text: "注文正文" }],
+      source_pages: [1],
+      evidence_refs: ["目标页证据 ID"],
+      confidence: 0.9,
+      boundary_state: "closed|open"
+    }],
+    delete_entry_ids: ["只列出确实应删除的当前页条目 id"],
+    issues: [{ source_pages: [1], description: "无法可靠判定之处", candidates: ["候选一", "候选二"] }]
+  } : {
     entries: [{
       continuation_of: "若续接上一批条目，填写上一批 entry id，否则为空字符串",
       boundary_state: "closed|open；目标页末作品未完时必须为 open",
@@ -438,9 +627,13 @@ export function buildClassicPoetryPrompt(pageBundles, previousEntries) {
     "9. 绝句、律诗必须检查完整句数与每句字数。四句五言或七言的完整作品应判为绝句，八句五言或七言的完整作品才可判为律诗；超过相应固定句数的长篇作品不得继续标作绝句或律诗，应依据版面和体式判断为古诗、歌行、排律等，证据不足时 form 留空并写入 issues。不得为了符合已猜测的体裁而补造、复制或挪用诗句。目标页结束但作品尚未完成时写 boundary_state=open，并利用只读后页确认边界；开放状态只表示作品尚未录完，不能用来绕过已经超出固定句数的错误体裁。下一批只补尚缺诗句。不得因换页提前关闭作品，不得用注文凑足句数，也不得重复上一批已经保存的诗句。",
     "10. 可补现代标点，但不得改变字词。无法确认的字或边界不要擅断，在 issues 中记录候选；不要使用 Markdown。",
     `11. 只输出目标页 ${JSON.stringify(targetPages)} 的 JSON。context_only=true 的前后页只用于判断跨页续接和作品边界，禁止把这些页独有的题名、正文、注文写入输出。若目标页开头明显承接上一批条目，用 continuation_of 指向给出的 entry id。`,
+    revisionEntries ? "单页人工修订模式：只返回需要修改或新建的条目；未改变的已有条目不要重复输出。已有条目沿用原 id，新条目 id 留空。确需删除时才把 id 放入 delete_entry_ids。前后页 JSON 和 context_only OCR 只用于判断边界，不得修改前后页独有条目。跨页条目可保留它原有的 source_pages，但不得给条目新增只在上下文页出现的正文。" : "",
+    revisionEntries ? `当前页正式 JSON（允许修订）：${JSON.stringify(revisionEntries)}` : "",
+    revisionEntries ? `前后页正式 JSON（只读上下文）：${JSON.stringify(revisionContext)}` : "",
     `输出形状：${JSON.stringify(expected)}`,
     `上一批末尾条目：${JSON.stringify(previousEntries)}`,
-    `本批双 OCR 证据（含只读前后页）：${JSON.stringify(pageBundles)}`
+    `本批双 OCR 证据（含只读前后页）：${JSON.stringify(pageBundles)}`,
+    manualPrompt ? "人工输入提示词（最高优先级）：\n校订者针对本页给出了以下明确要求。在不突破目标页范围、来源证据和 JSON 输出格式的前提下，它在题名、作品边界、分句、体裁、注文归属和文字取舍等判断中优先于上方的一般启发式规则。不得把这段要求原样写入正文或 issues。\n" + manualPrompt : ""
   ].join("\n");
 }
 
@@ -581,12 +774,8 @@ function validateClassicChunk(document, payload, options) {
     return validateGeneratedChunk(document, payload, options);
   } catch (error) {
     if (!Array.isArray(error.diagnostics)) throw error;
-    const hard = error.diagnostics.filter(item => CLASSIC_HARD_DIAGNOSTICS.has(item.code));
-    if (hard.length) {
-      error.diagnostics = hard;
-      throw error;
-    }
-    return { ok: true, entries: payload.entries?.length || 0, warnings: error.diagnostics };
+    return { ok: true, mode: "warnings", entries: payload.entries?.length || 0,
+      warnings: error.diagnostics };
   }
 }
 
@@ -803,8 +992,22 @@ async function runTriPassChunk({
     buildAnnotationReviewPrompt(documentTitle, canonicalPages, classifications, draftPlan,
       draftDiagnostics, previousEntries, buildEbookRules())
   );
-  if (review.error) throw review.error;
-  let accepted = materializeReferencePlan(review.parsed, canonicalPages);
+  const warnings = [
+    ...(classification.error?.diagnostics || (classification.error
+      ? [{ code: "invalid_classification_json", message: classification.error.message }]
+      : [])),
+    ...draftDiagnostics
+  ];
+  if (review.error) warnings.push(...(review.error.diagnostics || [{ code: "invalid_review_json", message: review.error.message }]));
+  let accepted;
+  for (const plan of [review.parsed, draftPlan]) {
+    if (!plan || accepted) continue;
+    try { accepted = materializeReferencePlan(plan, canonicalPages); }
+    catch (error) {
+      warnings.push(...(error.diagnostics || [{ code: "invalid_reference_plan", message: error.message }]));
+    }
+  }
+  accepted ||= { entries: [], issues: [] };
   const entryMerge = mergeExactCandidateEntries(accepted);
   accepted = entryMerge.candidate;
   const noteDedupe = dedupeExactCandidateNotes(accepted);
@@ -814,17 +1017,18 @@ async function runTriPassChunk({
   const validationOptions = { pageStart, pageEnd,
     pageBundles: canonicalValidationBundles(canonicalPages), openEntryIds };
   let validation;
-  let regulatedFormWarnings = [];
   try { validation = validateGeneratedChunk(document, accepted, validationOptions); }
   catch (error) {
+    const diagnostics = error.diagnostics || [{ code: "invalid_tri_pass_candidate", message: error.message }];
     const demoted = demoteInvalidRegulatedForms(accepted, error.diagnostics || []);
-    if (!demoted.changed) throw error;
-    accepted = demoted.candidate;
-    regulatedFormWarnings = error.diagnostics;
-    validation = validateGeneratedChunk(document, accepted, validationOptions);
-    validation.warnings = regulatedFormWarnings;
-    validation.repairs = [...entryMerge.repairs, ...noteDedupe.repairs, ...citationMarks.repairs, ...demoted.repairs];
+    if (demoted.changed) accepted = demoted.candidate;
+    warnings.push(...diagnostics);
+    validation = { ok: true, mode: "warnings", bypassed: true, entries: accepted.entries?.length || 0,
+      warnings, repairs: [...entryMerge.repairs, ...noteDedupe.repairs, ...citationMarks.repairs, ...demoted.repairs] };
   }
+  validation = { ...validation, mode: "warnings",
+    warnings: [...warnings, ...(validation.warnings || [])],
+    repairs: validation.repairs || [...entryMerge.repairs, ...noteDedupe.repairs, ...citationMarks.repairs] };
   if (runRecord) {
     await history.recordRunStep(projectId, runRecord.id, {
       kind: "structure-annotation-materialization", start_page: pageStart, end_page: pageEnd,
@@ -858,7 +1062,8 @@ export class EbookStore {
       base_url: process.env.SILICONFLOW_BASE_URL || DEFAULT_BASE_URL,
       model: process.env.SILICONFLOW_MODEL || DEFAULT_MODEL,
       chunk_size: DEFAULT_CHUNK_SIZE,
-      context_overlap: DEFAULT_CONTEXT_OVERLAP
+      context_overlap: DEFAULT_CONTEXT_OVERLAP,
+      ...warningOnlyGenerationPolicy()
     };
   }
 
@@ -903,6 +1108,263 @@ export class EbookStore {
     return { document, config: this.config() };
   }
 
+  async revisePage(projectId, options = {}) {
+    const id = safeId(projectId);
+    if (this.running.has(id) || this.writes.has(id)) {
+      throw Object.assign(new Error("该项目正在生成或保存，请稍后再试"), { status: 409 });
+    }
+    const config = this.config();
+    if (!config.configured) {
+      throw Object.assign(new Error("未配置 SILICONFLOW_API_KEY，请在 .env.local 中设置后重启 API"), { status: 400 });
+    }
+    const pageNumber = Number(options.page_number);
+    const manualPrompt = asText(options.manual_prompt);
+    if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+      throw Object.assign(new Error("page_number 必须是有效页码"), { status: 400 });
+    }
+    if (!manualPrompt) throw Object.assign(new Error("请输入本页修订提示词"), { status: 400 });
+    if (manualPrompt.length > 6000) throw Object.assign(new Error("本页修订提示词不能超过 6000 字"), { status: 400 });
+
+    this.running.add(id);
+    let runRecord;
+    try {
+      const project = await this.projectStore.index(id);
+      const formalDocument = (await this.read(id)).document;
+      const projectPages = project.source?.pages || [];
+      if (projectPages.length && !projectPages.some(page => Number(page.page_number) === pageNumber)) {
+        throw Object.assign(new Error(`P${pageNumber} 不在当前项目范围内`), { status: 400 });
+      }
+      const resultIds = (formalDocument.source?.result_ids || [])
+        .filter(resultId => project.results.some(result => result.id === resultId))
+        .slice(0, 2);
+      if (!resultIds.length) {
+        resultIds.push(...project.results.filter(result => !result.archived).slice(0, 2).map(result => result.id));
+      }
+      if (!resultIds.length) throw Object.assign(new Error("当前项目没有可用 OCR 结果"), { status: 400 });
+
+      const loaded = await Promise.all(resultIds.map(resultId => this.projectStore.view(id, resultId)));
+      const resultMaps = loaded.map(result => new Map(result.pages.map(page => [Number(page.page_number), page])));
+      if (!resultMaps.some(result => result.has(pageNumber))) {
+        throw Object.assign(new Error(`P${pageNumber} 没有 OCR 数据`), { status: 404 });
+      }
+      const bundles = [];
+      for (const contextPage of [pageNumber - 1, pageNumber, pageNumber + 1]) {
+        if (contextPage < 1 || !resultMaps.some(result => result.has(contextPage))) continue;
+        bundles.push({
+          page_number: contextPage,
+          context_only: contextPage !== pageNumber,
+          results: resultIds.map((resultId, index) => ({
+            result_id: resultId,
+            ...pageEvidence(resultMaps[index].get(contextPage) || { page_number: contextPage, regions: [] }, resultId)
+          }))
+        });
+      }
+      const currentEntries = formalDocument.entries.filter(entry => entry.source_pages?.includes(pageNumber));
+      const currentIds = new Set(currentEntries.map(entry => entry.id));
+      const contextEntries = formalDocument.entries.filter(entry => !currentIds.has(entry.id) &&
+        entry.source_pages?.some(page => page === pageNumber - 1 || page === pageNumber + 1));
+      const prompt = buildClassicPoetryPrompt(bundles, [], {
+        current_entries: currentEntries,
+        context_entries: contextEntries,
+        manual_prompt: manualPrompt
+      });
+      const model = config.model;
+      const messages = [
+        { role: "system", content: "你是中国诗词类古籍的单页校订专家。只返回符合要求的 JSON 对象。人工输入提示词是本次校订的最高优先级领域指令，但不得突破来源证据、目标范围和 JSON 格式。" },
+        { role: "user", content: prompt }
+      ];
+      runRecord = await this.history?.startRun(id, {
+        actor: "ai:siliconflow",
+        source: "manual-page-revision",
+        provider: "siliconflow",
+        model,
+        note: `人工提示驱动的 P${pageNumber} 单页模型修订`,
+        options: {
+          page_number: pageNumber,
+          context_pages: bundles.filter(bundle => bundle.context_only).map(bundle => bundle.page_number),
+          result_ids: resultIds,
+          attempts: 1,
+          manual_prompt_priority: "highest"
+        },
+        input: {
+          document_hash: hashJson(formalDocument),
+          current_entries: currentEntries,
+          context_entries: contextEntries,
+          manual_prompt: manualPrompt,
+          messages
+        }
+      });
+
+      const response = await siliconFlowRequest({
+        apiKey: process.env.SILICONFLOW_API_KEY,
+        baseUrl: config.base_url,
+        model,
+        maxTokens: Math.max(1024, Number(process.env.SILICONFLOW_MAX_TOKENS) || 8192),
+        messages
+      });
+      let parsed;
+      let diagnostics = [];
+      try { parsed = parseModelJson(response.content); }
+      catch (error) {
+        parsed = { entries: [], delete_entry_ids: [], issues: [] };
+        diagnostics.push({ code: "invalid_revision_json", message: error.message, source_pages: [pageNumber] });
+      }
+      const targetEvidenceRefs = bundles.filter(bundle => !bundle.context_only)
+        .flatMap(bundle => bundle.results || [])
+        .flatMap(result => result.regions || [])
+        .map(region => region.evidence_id).filter(Boolean);
+      const applied = applyManualPageRevision(formalDocument, parsed, {
+        pageNumber,
+        allowedEvidenceRefs: targetEvidenceRefs
+      });
+      const document = applied.document;
+      diagnostics.push(...(applied.warnings || []));
+      try {
+        validateGeneratedDocument(document, {
+          pageStart: Number(document.source?.page_range?.start) || pageNumber,
+          pageEnd: Number(document.source?.page_range?.end) || pageNumber
+        });
+      } catch (error) {
+        diagnostics.push(...(error.diagnostics || [{ code: "invalid_revision_candidate", message: error.message,
+          source_pages: [pageNumber] }]));
+      }
+      const validationIssueIds = appendValidationIssues(document, diagnostics, pageNumber, pageNumber);
+      applied.added_issue_ids.push(...validationIssueIds);
+      const completedAt = now();
+      document.generation = {
+        ...(document.generation || {}),
+        updated_at: completedAt,
+        last_manual_revision: {
+          page_number: pageNumber,
+          provider: "siliconflow",
+          model,
+          run_id: runRecord?.id || null,
+          manual_prompt_priority: "highest",
+          diagnostics_count: diagnostics.length,
+          completed_at: completedAt
+        }
+      };
+      validateEbook(document, id);
+
+      if (runRecord) {
+        await this.history.recordRunStep(id, runRecord.id, {
+          kind: "manual-page-revision",
+          page_number: pageNumber,
+          request: { model, messages },
+          response: { content: response.content, parsed, usage: response.usage },
+          applied: {
+            updated_entry_ids: applied.updated_entry_ids,
+            created_entry_ids: applied.created_entry_ids,
+            deleted_entry_ids: applied.deleted_entry_ids,
+            added_issue_ids: applied.added_issue_ids
+          },
+          validation: { ok: true, mode: "warnings", diagnostics }
+        });
+      }
+      const candidateOutput = {
+        kind: "manual-page-revision-candidate",
+        baseline_hash: hashJson(formalDocument),
+        candidate_hash: hashJson(document),
+        candidate_document: document,
+        candidate_payload: parsed,
+        page_number: pageNumber,
+        manual_prompt: manualPrompt,
+        model,
+        result_ids: resultIds,
+        updated_entry_ids: applied.updated_entry_ids,
+        created_entry_ids: applied.created_entry_ids,
+        deleted_entry_ids: applied.deleted_entry_ids,
+        added_issue_ids: applied.added_issue_ids,
+        diagnostics
+      };
+      if (runRecord) {
+        await this.history.finishRun(id, runRecord.id, {
+          status: "awaiting_approval",
+          output: candidateOutput
+        });
+      }
+      return {
+        config,
+        revision: {
+          page_number: pageNumber,
+          model,
+          run_id: runRecord?.id || null,
+          candidate: parsed,
+          preview_entries: document.entries.filter(entry => entry.source_pages?.includes(pageNumber)),
+          updated_entry_ids: applied.updated_entry_ids,
+          created_entry_ids: applied.created_entry_ids,
+          deleted_entry_ids: applied.deleted_entry_ids,
+          added_issue_ids: applied.added_issue_ids,
+          diagnostics
+        }
+      };
+    } catch (error) {
+      if (runRecord) {
+        await this.history?.finishRun(id, runRecord.id, {
+          status: "failed",
+          error: error.message
+        }).catch(() => {});
+      }
+      throw error;
+    } finally {
+      this.running.delete(id);
+    }
+  }
+
+  async applyPageRevision(projectId, runId, approval = {}) {
+    const id = safeId(projectId);
+    if (!this.history) throw Object.assign(new Error("当前项目没有历史记录服务"), { status: 500 });
+    const run = await this.history.readRun(id, safeId(runId));
+    if (run.manifest.source !== "manual-page-revision" || run.manifest.status !== "awaiting_approval" ||
+        run.output?.kind !== "manual-page-revision-candidate") {
+      throw Object.assign(new Error("该运行不是等待批准的单页修订候选"), { status: 409 });
+    }
+    const current = (await this.read(id)).document;
+    if (hashJson(current) !== run.output.baseline_hash) {
+      throw Object.assign(new Error("正式结果在候选生成后已经变化，请重新生成本页候选"), { status: 409 });
+    }
+    const candidate = structuredClone(run.output.candidate_document);
+    if (hashJson(candidate) !== run.output.candidate_hash) {
+      throw Object.assign(new Error("单页修订候选完整性校验失败"), { status: 409 });
+    }
+    const note = asText(approval.note) || `批准应用 P${run.output.page_number} 单页模型修订候选`;
+    const saved = await this.save(id, candidate, {
+      actor: "human",
+      source: "approved-manual-page-revision",
+      note,
+      run_id: runId,
+      expected_hash: run.output.baseline_hash,
+      metadata: {
+        page_number: run.output.page_number,
+        model: run.output.model,
+        manual_prompt: run.output.manual_prompt,
+        candidate_hash: run.output.candidate_hash,
+        approval: "explicit",
+        updated_entry_ids: run.output.updated_entry_ids,
+        created_entry_ids: run.output.created_entry_ids,
+        deleted_entry_ids: run.output.deleted_entry_ids,
+        added_issue_ids: run.output.added_issue_ids
+      }
+    });
+    await this.history.finishRun(id, runId, {
+      status: "complete",
+      output: { ...run.output, applied_at: now(), approval: "explicit" }
+    });
+    return {
+      ...saved,
+      revision: {
+        page_number: run.output.page_number,
+        model: run.output.model,
+        run_id: runId,
+        updated_entry_ids: run.output.updated_entry_ids,
+        created_entry_ids: run.output.created_entry_ids,
+        deleted_entry_ids: run.output.deleted_entry_ids,
+        added_issue_ids: run.output.added_issue_ids,
+        diagnostics: run.output.diagnostics
+      }
+    };
+  }
+
   async run(projectId, options = {}) {
     const id = safeId(projectId);
     if (this.running.has(id) || this.writes.has(id)) throw Object.assign(new Error("该项目正在生成或保存，请稍后再试"), { status: 409 });
@@ -930,14 +1392,9 @@ export class EbookStore {
         throw Object.assign(new Error(`不支持的生成流程：${pipeline}`), { status: 400 });
       }
       const model = asText(options.model) || (pipeline === CLASSIC_POETRY_PIPELINE ? CLASSIC_POETRY_MODEL : config.model);
-      const validationMode = asText(options.validation_mode) || "strict";
-      if (!["strict", "warnings"].includes(validationMode)) {
-        throw Object.assign(new Error("validation_mode 必须是 strict 或 warnings"), { status: 400 });
-      }
-      const maxAttempts = Number(options.max_attempts ?? 3);
-      if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) {
-        throw Object.assign(new Error("max_attempts 必须是 1-3 的整数"), { status: 400 });
-      }
+      const policy = warningOnlyGenerationPolicy();
+      const validationMode = policy.validation_mode;
+      const maxAttempts = policy.max_attempts;
       if (pipeline === TRI_PASS_PIPELINE && resultIds.length < 2) {
         throw Object.assign(new Error("tri-pass-regions-v1 必须选择两套 OCR 结果"), { status: 400 });
       }
@@ -1087,16 +1544,8 @@ export class EbookStore {
               ? buildClassicPoetryPrompt(bundles, previousEntries)
               : buildEbookPrompt(project.source?.book_title || project.title, bundles, previousEntries, learningContext) }
           ];
-          let previousResponseContent = "";
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-          const messages = attempt === 1 ? baseMessages : [...baseMessages,
-            { role: "assistant", content: previousResponseContent },
-            {
-              role: "user",
-              content: classic
-                ? buildClassicRetryPrompt(lastError?.diagnostics || [{ code: "invalid_candidate" }])
-                : `上一候选未通过程序硬校验。请根据以下机器诊断重新生成完整 JSON，不得输出解释，也不得放宽目标页范围。context_leak 中列出的 excerpt 必须从正文和注文中完整删除，即使它与目标页作品语义相关也不能保留。unmarked_citation_title 中列出的 excerpt 必须按规则补全书名号：典籍及其篇章写为《书名·篇名》，作者作品写为作者《作品名》，不得原样保留裸书名。repeated_work_title 表示把只出现一次的组诗总题错误复制到了多首诗：这些 poem 的 title 必须留空，共用同一 series.title，并按顺序填写 series.index。duplicate_line 或 duplicate_line_run 不得只机械删除后一处：必须回看 OCR 的字号与“某人诗也”“自注”“详案”等归属提示，把注文中的引诗移出 lines 并完整保留到 notes；不得用小字引诗把四句正文凑成八句。regulated_verse_line_count 或 regulated_verse_line_width 表示把多首近体诗或注文合并到了一个条目：必须按版面边界拆成独立 poem，每首七律八句、七绝四句、五律八句、五绝四句，并用共同 series.title 关联，不能只修改 form 来绕过检查。续接 open_entries 时必须严格查看 line_count 和 remaining_line_count，只输出尚缺的句数；补足后立即关闭该条目，后续诗另建 create 条目。修复后重新扫描全部 entries 和 notes[].text，不只修改被点名的一处：${JSON.stringify(lastError?.diagnostics || [{ code: "invalid_candidate", message: lastError?.message }])}`
-            }];
+          const messages = baseMessages;
           const response = await siliconFlowRequest({
             apiKey: process.env.SILICONFLOW_API_KEY,
             baseUrl: config.base_url,
@@ -1104,10 +1553,8 @@ export class EbookStore {
             maxTokens: Math.max(1024, Number(process.env.SILICONFLOW_MAX_TOKENS) || 8192),
             messages
           });
-          previousResponseContent = response.content;
           let parsed;
           let validation;
-          let validationError;
           try {
             parsed = parseModelJson(response.content);
             if (classic) {
@@ -1119,27 +1566,21 @@ export class EbookStore {
             });
           } catch (error) {
             if (!error.diagnostics) error.diagnostics = [{ code: "invalid_candidate", message: error.message }];
-            if (validationMode === "warnings" && parsed && Array.isArray(error.diagnostics)) {
-              validation = { ok: true, bypassed: true, warnings: error.diagnostics,
-                entries: Array.isArray(parsed?.entries) ? parsed.entries.length : 0 };
-            } else {
-              validationError = error;
-              lastError = error;
-            }
+            parsed ||= { entries: [], issues: [] };
+            validation = { ok: true, mode: "warnings", bypassed: true, warnings: error.diagnostics,
+              entries: Array.isArray(parsed.entries) ? parsed.entries.length : 0 };
           }
           if (runRecord) {
             await this.history.recordRunStep(id, runRecord.id, {
               kind: "structure-chunk", start_page: pageStart, end_page: pageEnd, attempt,
               request: { model, messages }, response: { content: response.content, parsed, usage: response.usage },
-              validation: validationError ? { ok: false, diagnostics: validationError.diagnostics } : validation
+              validation
             });
           }
-          if (!validationError) {
-            accepted = parsed;
-            acceptedResponse = response;
-            acceptedValidation = validation;
-            break;
-          }
+          accepted = parsed;
+          acceptedResponse = response;
+          acceptedValidation = validation;
+          break;
         }
         }
         if (!accepted) {
@@ -1168,10 +1609,11 @@ export class EbookStore {
           if (cursor <= pageEnd) await processChunk(cursor, pageEnd, adaptiveDepth + 1);
           return;
         }
-        mergeGenerated(document, accepted, pageStart, pageEnd, { allowedContinuationIds: openEntryIds });
-        if (validationMode === "warnings" && Array.isArray(acceptedValidation?.warnings)) {
-          document.issues.push(...validationDiagnosticsToIssues(acceptedValidation.warnings, pageStart, pageEnd));
-        }
+        const chunkWarnings = [...(acceptedValidation?.warnings || [])];
+        mergeGenerated(document, accepted, pageStart, pageEnd,
+          { allowedContinuationIds: openEntryIds, warningDiagnostics: chunkWarnings });
+        acceptedValidation = { ...acceptedValidation, ok: true, mode: "warnings", warnings: chunkWarnings };
+        appendValidationIssues(document, chunkWarnings, pageStart, pageEnd);
         document.generation.completed_through = pageEnd;
         document.generation.updated_at = now();
         document.generation.chunks.push({
@@ -1205,19 +1647,12 @@ export class EbookStore {
       try {
         finalValidation = validateGeneratedDocument(document, { pageStart: start, pageEnd: end });
       } catch (error) {
-        if (validationMode === "warnings" && Array.isArray(error.diagnostics)) {
-          finalValidation = { ok: true, bypassed: true, entries: document.entries.length,
-            warnings: error.diagnostics };
-        } else {
-          if (pipeline !== CLASSIC_POETRY_PIPELINE || !Array.isArray(error.diagnostics)) throw error;
-          const hard = error.diagnostics.filter(item => CLASSIC_HARD_DIAGNOSTICS.has(item.code));
-          if (hard.length) {
-            error.diagnostics = hard;
-            throw error;
-          }
-          finalValidation = { ok: true, entries: document.entries.length, warnings: error.diagnostics };
-        }
+        finalValidation = { ok: true, mode: "warnings", bypassed: true, entries: document.entries.length,
+          warnings: error.diagnostics || [{ code: "invalid_document_candidate", message: error.message }] };
       }
+      finalValidation = { ...finalValidation, ok: true, mode: "warnings",
+        warnings: finalValidation.warnings || [] };
+      appendValidationIssues(document, finalValidation.warnings, start, end);
       validateEbook(document, id);
       document.generation.status = "complete";
       document.generation.validation = finalValidation;
@@ -1225,7 +1660,7 @@ export class EbookStore {
       await atomicJson(this.filename(id), document);
       await this.history?.recordChange({ projectId: id, target: { kind: "ebook" }, before: documentBeforeRun, after: document,
         actor: "ai:siliconflow", source: "deepseek-structure", operation: "run_completed",
-        note: validationMode === "warnings" ? "DeepSeek 整理完成；校验诊断作为警示保留" : "DeepSeek 整理完成并通过候选硬校验", runId: runRecord?.id,
+        note: "DeepSeek 整理完成；所有校验诊断作为警示保留", runId: runRecord?.id,
         metadata: { start_page: start, end_page: end, validation: finalValidation } });
       if (runRecord) await this.history.finishRun(id, runRecord.id, { status: "complete", output: document });
       return { document, config };

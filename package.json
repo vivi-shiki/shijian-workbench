@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n api,web -c blue,green \"node packages/oldbook-server/src/index.mjs\" \"vite --config packages/oldbook-review/vite.config.js --host 127.0.0.1\"",
+    "dev": "concurrently -n api,web -c blue,green \"npm:api:dev\" \"npm:web\"",
     "api": "node packages/oldbook-server/src/index.mjs",
+    "api:dev": "node --watch --watch-preserve-output packages/oldbook-server/src/index.mjs",
     "web": "vite --config packages/oldbook-review/vite.config.js --host 127.0.0.1",
     "build": "vite build --config packages/oldbook-review/vite.config.js",
     "test": "node --test packages/oldbook-core/test/*.test.mjs packages/oldbook-review/test/*.test.mjs",
