@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyManualPageRevision, buildClassicPoetryPrompt, buildClassicRetryPrompt, buildEbookPrompt, emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, trimClassicContextOutput, validateEbook, validationDiagnosticsToIssues, warningOnlyGenerationPolicy } from "../src/ebook-store.mjs";
+import { applyManualPageRevision, applyManualRangeRevision, buildClassicPoetryPrompt, buildClassicRetryPrompt, buildEbookPrompt, emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, trimClassicContextOutput, validateEbook, validationDiagnosticsToIssues, warningOnlyGenerationPolicy } from "../src/ebook-store.mjs";
 import { validateGeneratedChunk, validateGeneratedDocument } from "../src/ebook-generation-validation.mjs";
 
 const project = { id: "book", title: "Book", results: [{ page_count: 30 }] };
@@ -95,6 +95,24 @@ test("manual page revision prompt puts human instructions last and at highest pr
   assert.ok(prompt.endsWith("请重新判断题名与正文边界。"));
 });
 
+test("manual range revision prompt distinguishes editable target pages from read-only context", () => {
+  const prompt = buildClassicPoetryPrompt([
+    { page_number: 9, context_only: true, results: [{ result_id: "ocr", regions: [{ text: "前页" }] }] },
+    { page_number: 10, context_only: false, results: [{ result_id: "ocr", regions: [{ text: "第一页" }] }] },
+    { page_number: 11, context_only: false, results: [{ result_id: "ocr", regions: [{ text: "第二页" }] }] },
+    { page_number: 12, context_only: true, results: [{ result_id: "ocr", regions: [{ text: "后页" }] }] }
+  ], [], {
+    current_entries: [{ id: "entry-0001", source_pages: [10, 11], lines: ["跨页正文。"] }],
+    context_entries: [{ id: "entry-0002", source_pages: [12], lines: ["后页正文。"] }],
+    manual_prompt: "复核跨页边界。"
+  });
+  assert.match(prompt, /连续多页人工修订模式/);
+  assert.match(prompt, /目标范围正式 JSON（允许修订）/);
+  assert.match(prompt, /范围外相邻页正式 JSON（只读上下文）/);
+  assert.match(prompt, /目标页 \[10,11\]/);
+  assert.ok(prompt.endsWith("复核跨页边界。"));
+});
+
 test("manual page revision only updates target entries and target-page evidence", () => {
   const document = emptyEbook(project);
   document.entries = [{
@@ -123,6 +141,27 @@ test("manual page revision only updates target entries and target-page evidence"
   assert.deepEqual(evidence.document.entries[0].evidence_refs, ["p10:ocr:r1"]);
   assert.ok(evidence.warnings.some(warning => warning.code === "revision_external_evidence_ignored"));
   assert.ok(evidence.document.issues.some(issue => issue.description.includes("revision_external_evidence_ignored")));
+});
+
+test("manual range revision updates every target page but leaves outside entries untouched", () => {
+  const document = emptyEbook(project);
+  document.entries = [10, 11, 12].map((page) => ({
+    id: `entry-${page}`, kind: "poem", title: `P${page}`, subtitle: "", author: "", form: "",
+    heading_level: null, series: null, lines: [`第${page}页。`], prose: "", notes: [], source_pages: [page],
+    evidence_refs: [`p${page}:ocr:r1`], confidence: 0.8, review_status: "needs_review"
+  }));
+  const result = applyManualRangeRevision(document, { entries: [
+    { id: "entry-10", title: "范围首篇", source_pages: [10], evidence_refs: ["p10:ocr:r1"] },
+    { id: "entry-11", title: "范围次篇", source_pages: [11], evidence_refs: ["p11:ocr:r1"] },
+    { id: "entry-12", title: "越界修改" }
+  ], issues: [{ source_pages: [11], description: "范围问题" }] }, {
+    pageStart: 10, pageEnd: 11, allowedEvidenceRefs: ["p10:ocr:r1", "p11:ocr:r1"]
+  });
+  assert.equal(result.document.entries[0].title, "范围首篇");
+  assert.equal(result.document.entries[1].title, "范围次篇");
+  assert.equal(result.document.entries[2].title, "P12");
+  assert.ok(result.warnings.some(warning => warning.code === "revision_out_of_scope_update_ignored"));
+  assert.ok(result.document.issues.some(issue => issue.description === "范围问题" && issue.source_pages[0] === 11));
 });
 
 test("all model generation uses one warning-only attempt", () => {

@@ -120,11 +120,19 @@ function App() {
     return request;
   }, [projectId]);
 
-  const reviseLivePage = React.useCallback(async ({ pageNumber, manualPrompt }) => {
+  const loadLiveRange = React.useCallback(async (pageStart, pageEnd) => {
+    const payload = await fetchJson(`/api/projects/${projectId}/reader?from=${pageStart}&to=${pageEnd}`);
+    const merged = mergeLiveData(liveCacheRef.current.get(projectId), payload);
+    liveCacheRef.current.set(projectId, merged);
+    if (selectionRef.current === `${projectId}:live`) setData(merged);
+    return merged;
+  }, [projectId]);
+
+  const reviseLivePage = React.useCallback(async ({ pageStart, pageEnd, manualPrompt }) => {
     const response = await fetch(`/api/projects/${projectId}/ebook/revise-page`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ page_number: pageNumber, manual_prompt: manualPrompt })
+      body: JSON.stringify({ start_page: pageStart, end_page: pageEnd, manual_prompt: manualPrompt })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || payload.message || "本页模型修订失败");
@@ -189,7 +197,7 @@ function App() {
         </div>
       </header>
       {error ? <div className="reader-error" role="alert">{error}</div> : null}
-      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} onRevisePage={data.manifest ? null : reviseLivePage} onApplyPageRevision={data.manifest ? null : applyPageRevision} /> : <div className="reader-loading">正在读取对照资料…</div>}
+      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} onEnsureRange={data.manifest ? null : loadLiveRange} onRevisePage={data.manifest ? null : reviseLivePage} onApplyPageRevision={data.manifest ? null : applyPageRevision} /> : <div className="reader-loading">正在读取对照资料…</div>}
     </main>
   );
 }

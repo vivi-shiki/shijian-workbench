@@ -376,19 +376,21 @@ function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value || {}, key);
 }
 
-function manualRevisionEntry(raw, existing, pageNumber, allowedEvidenceRefs, usedIds, warnings) {
+function manualRevisionEntry(raw, existing, pageStart, pageEnd, allowedEvidenceRefs, usedIds, warnings) {
+  const scopePages = Array.from({ length: pageEnd - pageStart + 1 }, (_, index) => pageStart + index);
+  const targetPages = new Set(scopePages);
   let sourcePages = uniqueNumbers(hasOwn(raw, "source_pages") ? raw.source_pages : existing?.source_pages);
   if (existing) {
-    const allowedPages = new Set([...(existing.source_pages || []), pageNumber]);
+    const allowedPages = new Set([...(existing.source_pages || []), ...scopePages]);
     if (sourcePages.some(page => !allowedPages.has(page))) {
       warnings.push({ code: "revision_context_page_ignored",
-        message: `条目 ${existing.id} 新增的上下文页已忽略`, source_pages: [pageNumber] });
+        message: `条目 ${existing.id} 新增的上下文页已忽略`, source_pages: scopePages });
       sourcePages = sourcePages.filter(page => allowedPages.has(page));
     }
-  } else if (sourcePages.some(page => page !== pageNumber)) {
+  } else if (sourcePages.some(page => !targetPages.has(page))) {
     warnings.push({ code: "revision_context_page_ignored",
-      message: "新条目引用的目标页外页码已忽略", source_pages: [pageNumber] });
-    sourcePages = sourcePages.filter(page => page === pageNumber);
+      message: "新条目引用的目标范围外页码已忽略", source_pages: scopePages });
+    sourcePages = sourcePages.filter(page => targetPages.has(page));
   }
 
   const id = existing?.id || nextEntryId([...usedIds].map(value => ({ id: value })));
@@ -409,7 +411,7 @@ function manualRevisionEntry(raw, existing, pageNumber, allowedEvidenceRefs, use
     lines,
     prose: hasOwn(raw, "prose") ? asText(raw.prose) : asText(existing?.prose),
     notes: [],
-    source_pages: sourcePages.length ? sourcePages : existing?.source_pages?.length ? [...existing.source_pages] : [pageNumber],
+    source_pages: sourcePages.length ? sourcePages : existing?.source_pages?.length ? [...existing.source_pages] : [pageStart],
     confidence: Math.max(0, Math.min(1, Number(hasOwn(raw, "confidence") ? raw.confidence : existing?.confidence) || 0)),
     review_status: "needs_review",
     boundary_state: hasOwn(raw, "boundary_state") ? asText(raw.boundary_state) || "closed" : asText(existing?.boundary_state) || "closed"
@@ -422,8 +424,8 @@ function manualRevisionEntry(raw, existing, pageNumber, allowedEvidenceRefs, use
   const invalidRefs = requestedRefs.filter(reference => !allowedEvidenceRefs.has(reference));
   if (invalidRefs.length) {
     warnings.push({ code: "revision_external_evidence_ignored",
-      message: `当前页之外的证据引用已忽略：${invalidRefs.slice(0, 3).join(", ")}`,
-      source_pages: [pageNumber] });
+      message: `目标范围之外的证据引用已忽略：${invalidRefs.slice(0, 3).join(", ")}`,
+      source_pages: scopePages });
   }
   const validRefs = requestedRefs.filter(reference => allowedEvidenceRefs.has(reference));
   normalized.evidence_refs = validRefs.length
@@ -432,18 +434,21 @@ function manualRevisionEntry(raw, existing, pageNumber, allowedEvidenceRefs, use
   return normalized;
 }
 
-export function applyManualPageRevision(document, payload, { pageNumber, allowedEvidenceRefs = [] }) {
+export function applyManualRangeRevision(document, payload, { pageStart, pageEnd, allowedEvidenceRefs = [] }) {
+  const scopePages = Number.isInteger(pageStart) && Number.isInteger(pageEnd) && pageEnd >= pageStart
+    ? Array.from({ length: pageEnd - pageStart + 1 }, (_, index) => pageStart + index)
+    : [];
   if (!document || !Array.isArray(document.entries) || !payload || typeof payload !== "object" || Array.isArray(payload)) {
     return {
       document: structuredClone(document), updated_entry_ids: [], created_entry_ids: [],
       deleted_entry_ids: [], added_issue_ids: [],
-      warnings: [{ code: "invalid_revision_payload", message: "单页修订候选格式无效", source_pages: [pageNumber] }]
+      warnings: [{ code: "invalid_revision_payload", message: "范围修订候选格式无效", source_pages: scopePages }]
     };
   }
   const revised = structuredClone(document);
   const warnings = [];
   const editable = new Map(revised.entries
-    .filter(entry => entry.source_pages?.includes(pageNumber))
+    .filter(entry => entry.source_pages?.some(page => page >= pageStart && page <= pageEnd))
     .map(entry => [entry.id, entry]));
   const requestedDeleteIds = [...new Set((Array.isArray(payload.delete_entry_ids) ? payload.delete_entry_ids : [])
     .map(asText).filter(Boolean))];
@@ -451,7 +456,7 @@ export function applyManualPageRevision(document, payload, { pageNumber, allowed
   for (const id of requestedDeleteIds) {
     if (editable.has(id)) deleteIds.add(id);
     else warnings.push({ code: "revision_out_of_scope_delete_ignored",
-      message: `当前页之外的删除请求已忽略：${id}`, source_pages: [pageNumber] });
+      message: `目标范围之外的删除请求已忽略：${id}`, source_pages: scopePages });
   }
 
   const targetRefs = new Set(allowedEvidenceRefs.map(asText).filter(Boolean));
@@ -463,23 +468,23 @@ export function applyManualPageRevision(document, payload, { pageNumber, allowed
     const requestedId = asText(raw.id);
     if (requestedId && !editable.has(requestedId)) {
       warnings.push({ code: "revision_out_of_scope_update_ignored",
-        message: `当前页之外的修改请求已忽略：${requestedId}`, source_pages: [pageNumber] });
+        message: `目标范围之外的修改请求已忽略：${requestedId}`, source_pages: scopePages });
       continue;
     }
     if (requestedId && updates.has(requestedId)) {
       warnings.push({ code: "revision_duplicate_update_ignored",
-        message: `同一条目的重复修改已忽略：${requestedId}`, source_pages: [pageNumber] });
+        message: `同一条目的重复修改已忽略：${requestedId}`, source_pages: scopePages });
       continue;
     }
     if (requestedId && deleteIds.has(requestedId)) {
       deleteIds.delete(requestedId);
       warnings.push({ code: "revision_delete_update_conflict",
-        message: `条目 ${requestedId} 同时请求修改和删除，已保留修改`, source_pages: [pageNumber] });
+        message: `条目 ${requestedId} 同时请求修改和删除，已保留修改`, source_pages: scopePages });
     }
     const existing = requestedId ? editable.get(requestedId) : null;
     const allowedRefs = new Set([...targetRefs, ...(existing?.evidence_refs || [])]);
     const normalized = manualRevisionEntry(raw, existing,
-      pageNumber, allowedRefs, usedIds, warnings);
+      pageStart, pageEnd, allowedRefs, usedIds, warnings);
     if (requestedId) updates.set(requestedId, normalized);
     else created.push(normalized);
   }
@@ -491,7 +496,7 @@ export function applyManualPageRevision(document, payload, { pageNumber, allowed
     if (index === lastEditableIndex) outputEntries.push(...created);
   });
   if (lastEditableIndex < 0 && created.length) {
-    const insertion = outputEntries.findIndex(entry => Math.min(...(entry.source_pages || [Number.MAX_SAFE_INTEGER])) > pageNumber);
+    const insertion = outputEntries.findIndex(entry => Math.min(...(entry.source_pages || [Number.MAX_SAFE_INTEGER])) > pageEnd);
     if (insertion < 0) outputEntries.push(...created);
     else outputEntries.splice(insertion, 0, ...created);
   }
@@ -508,7 +513,8 @@ export function applyManualPageRevision(document, payload, { pageNumber, allowed
     nextIssue += 1;
     const issue = {
       id: issueId,
-      source_pages: [pageNumber],
+      source_pages: uniqueNumbers(raw.source_pages, pageStart, pageEnd).length
+        ? uniqueNumbers(raw.source_pages, pageStart, pageEnd) : [pageStart],
       description: asText(raw.description),
       candidates: (Array.isArray(raw.candidates) ? raw.candidates : []).map(asText).filter(Boolean),
       resolved: false
@@ -516,7 +522,7 @@ export function applyManualPageRevision(document, payload, { pageNumber, allowed
     revised.issues.push(issue);
     addedIssues.push(issue.id);
   }
-  const warningIssueIds = appendValidationIssues(revised, warnings, pageNumber, pageNumber);
+  const warningIssueIds = appendValidationIssues(revised, warnings, pageStart, pageEnd);
   validateEbook(revised, revised.project_id);
   return {
     document: revised,
@@ -526,6 +532,14 @@ export function applyManualPageRevision(document, payload, { pageNumber, allowed
     added_issue_ids: [...addedIssues, ...warningIssueIds],
     warnings
   };
+}
+
+export function applyManualPageRevision(document, payload, { pageNumber, allowedEvidenceRefs = [] }) {
+  return applyManualRangeRevision(document, payload, {
+    pageStart: pageNumber,
+    pageEnd: pageNumber,
+    allowedEvidenceRefs
+  });
 }
 
 function regionText(region) {
@@ -612,6 +626,10 @@ export function buildClassicPoetryPrompt(pageBundles, previousEntries, options =
     issues: [{ source_pages: [1], description: "无法可靠判定之处", candidates: ["候选一", "候选二"] }]
   };
   const targetPages = pageBundles.filter(bundle => !bundle.context_only).map(bundle => bundle.page_number);
+  const rangeRevision = revisionEntries && targetPages.length > 1;
+  const revisionModeRule = rangeRevision
+    ? "连续多页人工修订模式：只返回需要修改或新建的条目；未改变的已有条目不要重复输出。已有条目沿用原 id，新条目 id 留空。确需删除时才把 id 放入 delete_entry_ids。范围外 JSON 和 context_only OCR 只用于判断边界，不得修改范围外独有条目。跨页条目可保留它原有的 source_pages，但不得给条目新增只在上下文页出现的正文。"
+    : "单页人工修订模式：只返回需要修改或新建的条目；未改变的已有条目不要重复输出。已有条目沿用原 id，新条目 id 留空。确需删除时才把 id 放入 delete_entry_ids。前后页 JSON 和 context_only OCR 只用于判断边界，不得修改前后页独有条目。跨页条目可保留它原有的 source_pages，但不得给条目新增只在上下文页出现的正文。";
 
   return [
     "你正在整理一部中国诗词类古籍的 OCR 校对稿，目标是生成忠实、可校订的现代电子排版数据。",
@@ -628,13 +646,13 @@ export function buildClassicPoetryPrompt(pageBundles, previousEntries, options =
     "9. 绝句、律诗必须检查完整句数与每句字数。四句五言或七言的完整作品应判为绝句，八句五言或七言的完整作品才可判为律诗；超过相应固定句数的长篇作品不得继续标作绝句或律诗，应依据版面和体式判断为古诗、歌行、排律等，证据不足时 form 留空并写入 issues。不得为了符合已猜测的体裁而补造、复制或挪用诗句。目标页结束但作品尚未完成时写 boundary_state=open，并利用只读后页确认边界；开放状态只表示作品尚未录完，不能用来绕过已经超出固定句数的错误体裁。下一批只补尚缺诗句。不得因换页提前关闭作品，不得用注文凑足句数，也不得重复上一批已经保存的诗句。",
     "10. 可补现代标点，但不得改变字词。无法确认的字或边界不要擅断，在 issues 中记录候选；不要使用 Markdown。",
     `11. 只输出目标页 ${JSON.stringify(targetPages)} 的 JSON。context_only=true 的前后页只用于判断跨页续接和作品边界，禁止把这些页独有的题名、正文、注文写入输出。若目标页开头明显承接上一批条目，用 continuation_of 指向给出的 entry id。`,
-    revisionEntries ? "单页人工修订模式：只返回需要修改或新建的条目；未改变的已有条目不要重复输出。已有条目沿用原 id，新条目 id 留空。确需删除时才把 id 放入 delete_entry_ids。前后页 JSON 和 context_only OCR 只用于判断边界，不得修改前后页独有条目。跨页条目可保留它原有的 source_pages，但不得给条目新增只在上下文页出现的正文。" : "",
-    revisionEntries ? `当前页正式 JSON（允许修订）：${JSON.stringify(revisionEntries)}` : "",
-    revisionEntries ? `前后页正式 JSON（只读上下文）：${JSON.stringify(revisionContext)}` : "",
+    revisionEntries ? revisionModeRule : "",
+    revisionEntries ? `${rangeRevision ? "目标范围" : "当前页"}正式 JSON（允许修订）：${JSON.stringify(revisionEntries)}` : "",
+    revisionEntries ? `${rangeRevision ? "范围外相邻页" : "前后页"}正式 JSON（只读上下文）：${JSON.stringify(revisionContext)}` : "",
     `输出形状：${JSON.stringify(expected)}`,
     `上一批末尾条目：${JSON.stringify(previousEntries)}`,
     `本批双 OCR 证据（含只读前后页）：${JSON.stringify(pageBundles)}`,
-    manualPrompt ? "人工输入提示词（最高优先级）：\n校订者针对本页给出了以下明确要求。在不突破目标页范围、来源证据和 JSON 输出格式的前提下，它在题名、作品边界、分句、体裁、注文归属和文字取舍等判断中优先于上方的一般启发式规则。不得把这段要求原样写入正文或 issues。\n" + manualPrompt : ""
+    manualPrompt ? `人工输入提示词（最高优先级）：\n校订者针对${rangeRevision ? "本次连续页范围" : "本页"}给出了以下明确要求。在不突破目标页范围、来源证据和 JSON 输出格式的前提下，它在题名、作品边界、分句、体裁、注文归属和文字取舍等判断中优先于上方的一般启发式规则。不得把这段要求原样写入正文或 issues。\n` + manualPrompt : ""
   ].join("\n");
 }
 
@@ -1128,13 +1146,22 @@ export class EbookStore {
     if (!config.configured) {
       throw Object.assign(new Error("未配置 SILICONFLOW_API_KEY，请在 .env.local 中设置后重启 API"), { status: 400 });
     }
-    const pageNumber = Number(options.page_number);
+    const requestedPage = Number(options.page_number);
+    const pageStart = Number(options.start_page ?? requestedPage);
+    const pageEnd = Number(options.end_page ?? requestedPage);
+    const rangePages = Number.isInteger(pageStart) && Number.isInteger(pageEnd) && pageEnd >= pageStart
+      ? Array.from({ length: pageEnd - pageStart + 1 }, (_, index) => pageStart + index)
+      : [];
+    const singlePage = pageStart === pageEnd;
     const manualPrompt = asText(options.manual_prompt);
-    if (!Number.isInteger(pageNumber) || pageNumber < 1) {
-      throw Object.assign(new Error("page_number 必须是有效页码"), { status: 400 });
+    if (!Number.isInteger(pageStart) || !Number.isInteger(pageEnd) || pageStart < 1 || pageEnd < pageStart) {
+      throw Object.assign(new Error("start_page 和 end_page 必须是有效的连续页码范围"), { status: 400 });
     }
-    if (!manualPrompt) throw Object.assign(new Error("请输入本页修订提示词"), { status: 400 });
-    if (manualPrompt.length > 6000) throw Object.assign(new Error("本页修订提示词不能超过 6000 字"), { status: 400 });
+    if (rangePages.length > 5) {
+      throw Object.assign(new Error("连续多页修订单次最多支持 5 页，请缩小范围"), { status: 400 });
+    }
+    if (!manualPrompt) throw Object.assign(new Error("请输入范围修订提示词"), { status: 400 });
+    if (manualPrompt.length > 6000) throw Object.assign(new Error("范围修订提示词不能超过 6000 字"), { status: 400 });
 
     this.running.add(id);
     let runRecord;
@@ -1142,8 +1169,10 @@ export class EbookStore {
       const project = await this.projectStore.index(id);
       const formalDocument = (await this.read(id)).document;
       const projectPages = project.source?.pages || [];
-      if (projectPages.length && !projectPages.some(page => Number(page.page_number) === pageNumber)) {
-        throw Object.assign(new Error(`P${pageNumber} 不在当前项目范围内`), { status: 400 });
+      const projectPageNumbers = new Set(projectPages.map(page => Number(page.page_number)));
+      const missingProjectPage = rangePages.find(page => projectPages.length && !projectPageNumbers.has(page));
+      if (missingProjectPage) {
+        throw Object.assign(new Error(`P${missingProjectPage} 不在当前项目范围内`), { status: 400 });
       }
       const resultIds = (formalDocument.source?.result_ids || [])
         .filter(resultId => project.results.some(result => result.id === resultId))
@@ -1155,25 +1184,27 @@ export class EbookStore {
 
       const loaded = await Promise.all(resultIds.map(resultId => this.projectStore.view(id, resultId)));
       const resultMaps = loaded.map(result => new Map(result.pages.map(page => [Number(page.page_number), page])));
-      if (!resultMaps.some(result => result.has(pageNumber))) {
-        throw Object.assign(new Error(`P${pageNumber} 没有 OCR 数据`), { status: 404 });
+      const missingOcrPage = rangePages.find(page => !resultMaps.some(result => result.has(page)));
+      if (missingOcrPage) {
+        throw Object.assign(new Error(`P${missingOcrPage} 没有 OCR 数据`), { status: 404 });
       }
       const bundles = [];
-      for (const contextPage of [pageNumber - 1, pageNumber, pageNumber + 1]) {
+      for (let contextPage = pageStart - 1; contextPage <= pageEnd + 1; contextPage += 1) {
         if (contextPage < 1 || !resultMaps.some(result => result.has(contextPage))) continue;
         bundles.push({
           page_number: contextPage,
-          context_only: contextPage !== pageNumber,
+          context_only: contextPage < pageStart || contextPage > pageEnd,
           results: resultIds.map((resultId, index) => ({
             result_id: resultId,
             ...pageEvidence(resultMaps[index].get(contextPage) || { page_number: contextPage, regions: [] }, resultId)
           }))
         });
       }
-      const currentEntries = formalDocument.entries.filter(entry => entry.source_pages?.includes(pageNumber));
+      const currentEntries = formalDocument.entries.filter(entry =>
+        entry.source_pages?.some(page => page >= pageStart && page <= pageEnd));
       const currentIds = new Set(currentEntries.map(entry => entry.id));
       const contextEntries = formalDocument.entries.filter(entry => !currentIds.has(entry.id) &&
-        entry.source_pages?.some(page => page === pageNumber - 1 || page === pageNumber + 1));
+        entry.source_pages?.some(page => page === pageStart - 1 || page === pageEnd + 1));
       const prompt = buildClassicPoetryPrompt(bundles, [], {
         current_entries: currentEntries,
         context_entries: contextEntries,
@@ -1181,7 +1212,7 @@ export class EbookStore {
       });
       const model = config.model;
       const messages = [
-        { role: "system", content: "你是中国诗词类古籍的单页校订专家。只返回符合要求的 JSON 对象。人工输入提示词是本次校订的最高优先级领域指令，但不得突破来源证据、目标范围和 JSON 格式。" },
+        { role: "system", content: `你是中国诗词类古籍的${singlePage ? "单页" : "连续多页"}校订专家。只返回符合要求的 JSON 对象。人工输入提示词是本次校订的最高优先级领域指令，但不得突破来源证据、目标范围和 JSON 格式。` },
         { role: "user", content: prompt }
       ];
       runRecord = await this.history?.startRun(id, {
@@ -1189,9 +1220,10 @@ export class EbookStore {
         source: "manual-page-revision",
         provider: "siliconflow",
         model,
-        note: `人工提示驱动的 P${pageNumber} 单页模型修订`,
+        note: `人工提示驱动的 ${singlePage ? `P${pageStart} 单页` : `P${pageStart}-${pageEnd} 连续多页`}模型修订`,
         options: {
-          page_number: pageNumber,
+          page_number: singlePage ? pageStart : null,
+          page_range: { start: pageStart, end: pageEnd },
           context_pages: bundles.filter(bundle => bundle.context_only).map(bundle => bundle.page_number),
           result_ids: resultIds,
           attempts: 1,
@@ -1218,35 +1250,37 @@ export class EbookStore {
       try { parsed = parseModelJson(response.content); }
       catch (error) {
         parsed = { entries: [], delete_entry_ids: [], issues: [] };
-        diagnostics.push({ code: "invalid_revision_json", message: error.message, source_pages: [pageNumber] });
+        diagnostics.push({ code: "invalid_revision_json", message: error.message, source_pages: rangePages });
       }
       const targetEvidenceRefs = bundles.filter(bundle => !bundle.context_only)
         .flatMap(bundle => bundle.results || [])
         .flatMap(result => result.regions || [])
         .map(region => region.evidence_id).filter(Boolean);
-      const applied = applyManualPageRevision(formalDocument, parsed, {
-        pageNumber,
+      const applied = applyManualRangeRevision(formalDocument, parsed, {
+        pageStart,
+        pageEnd,
         allowedEvidenceRefs: targetEvidenceRefs
       });
       const document = applied.document;
       diagnostics.push(...(applied.warnings || []));
       try {
         validateGeneratedDocument(document, {
-          pageStart: Number(document.source?.page_range?.start) || pageNumber,
-          pageEnd: Number(document.source?.page_range?.end) || pageNumber
+          pageStart: Number(document.source?.page_range?.start) || pageStart,
+          pageEnd: Number(document.source?.page_range?.end) || pageEnd
         });
       } catch (error) {
         diagnostics.push(...(error.diagnostics || [{ code: "invalid_revision_candidate", message: error.message,
-          source_pages: [pageNumber] }]));
+          source_pages: rangePages }]));
       }
-      const validationIssueIds = appendValidationIssues(document, diagnostics, pageNumber, pageNumber);
+      const validationIssueIds = appendValidationIssues(document, diagnostics, pageStart, pageEnd);
       applied.added_issue_ids.push(...validationIssueIds);
       const completedAt = now();
       document.generation = {
         ...(document.generation || {}),
         updated_at: completedAt,
         last_manual_revision: {
-          page_number: pageNumber,
+          ...(singlePage ? { page_number: pageStart } : {}),
+          page_range: { start: pageStart, end: pageEnd },
           provider: "siliconflow",
           model,
           run_id: runRecord?.id || null,
@@ -1260,7 +1294,8 @@ export class EbookStore {
       if (runRecord) {
         await this.history.recordRunStep(id, runRecord.id, {
           kind: "manual-page-revision",
-          page_number: pageNumber,
+          page_number: singlePage ? pageStart : null,
+          page_range: { start: pageStart, end: pageEnd },
           request: { model, messages },
           response: { content: response.content, parsed, usage: response.usage },
           applied: {
@@ -1277,7 +1312,8 @@ export class EbookStore {
         baseline: formalDocument,
         candidate: document,
         candidate_payload: parsed,
-        page_number: pageNumber,
+        ...(singlePage ? { page_number: pageStart } : {}),
+        page_range: { start: pageStart, end: pageEnd },
         manual_prompt: manualPrompt,
         model,
         result_ids: resultIds,
@@ -1297,12 +1333,14 @@ export class EbookStore {
       return {
         config,
         revision: {
-          page_number: pageNumber,
+          page_number: singlePage ? pageStart : null,
+          page_range: { start: pageStart, end: pageEnd },
           model,
           run_id: runRecord?.id || null,
           candidate_hash: candidateOutput.candidate_hash,
           candidate: parsed,
-          preview_entries: document.entries.filter(entry => entry.source_pages?.includes(pageNumber)),
+          preview_entries: document.entries.filter(entry =>
+            entry.source_pages?.some(page => page >= pageStart && page <= pageEnd)),
           updated_entry_ids: applied.updated_entry_ids,
           created_entry_ids: applied.created_entry_ids,
           deleted_entry_ids: applied.deleted_entry_ids,

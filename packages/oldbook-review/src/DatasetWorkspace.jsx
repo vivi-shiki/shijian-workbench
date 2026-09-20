@@ -117,7 +117,7 @@ function AnnotatedText({ text, notes, field, line = null }) {
     : <React.Fragment key={`text-${index}`}>{segment.text}</React.Fragment>);
 }
 
-function RevisionPreviewDialog({ pageNumber, page, entries, results, links, onClose }) {
+function RevisionPreviewDialog({ pageStart, pageEnd, pages, entries, results, links, onClose }) {
   const [hoveredRegion, setHoveredRegion] = React.useState("");
   const [hoveredTarget, setHoveredTarget] = React.useState("");
   const relatedTargets = React.useMemo(() => new Set(hoveredRegion ? links.by_region?.[hoveredRegion] || [] : []), [hoveredRegion, links]);
@@ -125,19 +125,21 @@ function RevisionPreviewDialog({ pageNumber, page, entries, results, links, onCl
     ? (links.by_target?.[hoveredTarget] || []).map((source) => source.region_key)
     : hoveredRegion ? [hoveredRegion] : []), [hoveredRegion, hoveredTarget, links]);
   const activeEntry = entries[0]?.id || "";
+  const activePage = pages[0]?.page_number || pageStart;
+  const rangeLabel = pageStart === pageEnd ? pageLabel(pageStart) : `${pageLabel(pageStart)}–${pageLabel(pageEnd)}`;
 
   return <div className="revision-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="revision-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="revision-preview-title">
       <header>
-        <div><h2 id="revision-preview-title">{pageLabel(pageNumber)} 候选排版预览</h2><p>左侧为本页双 OCR，右侧为尚未批准的候选结果。</p></div>
+        <div><h2 id="revision-preview-title">{rangeLabel} 候选排版预览</h2><p>左侧为目标范围双 OCR，右侧为尚未批准的候选结果。</p></div>
         <button className="icon-button" type="button" onClick={onClose} title="关闭预览"><X size={17} /></button>
       </header>
       <div className="revision-preview-workspace">
         <ComparisonPanes
-          pages={page ? [page] : []}
+          pages={pages}
           results={results}
           links={links}
-          activePage={pageNumber}
+          activePage={activePage}
           relatedRegions={relatedRegions}
           onPageVisible={NOOP}
           onRegionEnter={setHoveredRegion}
@@ -156,7 +158,12 @@ function RevisionPreviewDialog({ pageNumber, page, entries, results, links, onCl
   </div>;
 }
 
-function PageRevisionDialog({ projectId, pageNumber, page, entries, results, links, modelConfig, onClose, onConfirm, onApply }) {
+function PageRevisionDialog({ projectId, pageNumber, pages, entries, results, links, modelConfig, onClose, onConfirm, onApply, onEnsureRange }) {
+  const firstAvailablePage = pages[0]?.page_number || pageNumber;
+  const lastAvailablePage = pages.at(-1)?.page_number || pageNumber;
+  const [rangeMode, setRangeMode] = React.useState("single");
+  const [pageStart, setPageStart] = React.useState(pageNumber);
+  const [pageEnd, setPageEnd] = React.useState(pageNumber);
   const [manualPrompt, setManualPrompt] = React.useState("");
   const [promptHistory, setPromptHistory] = React.useState(() => recentPrompts(projectId));
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -174,13 +181,21 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [onClose, previewOpen, running]);
-  const pageJson = React.useMemo(() => JSON.stringify({ page_number: pageNumber, entries }, null, 2), [entries, pageNumber]);
+  const rangeLabel = pageStart === pageEnd ? pageLabel(pageStart) : `${pageLabel(pageStart)}–${pageLabel(pageEnd)}`;
+  const selectedPages = React.useMemo(() => pages.filter((page) =>
+    page.page_number >= pageStart && page.page_number <= pageEnd), [pageEnd, pageStart, pages]);
+  const selectedEntries = React.useMemo(() => entries.filter((entry) =>
+    entry.source_pages?.some((page) => page >= pageStart && page <= pageEnd)), [entries, pageEnd, pageStart]);
+  const pageJson = React.useMemo(() => JSON.stringify({
+    page_range: { start: pageStart, end: pageEnd },
+    entries: selectedEntries
+  }, null, 2), [pageEnd, pageStart, selectedEntries]);
   const ocrPages = React.useMemo(() => (results || []).map((result) => {
-    const page = result.pages?.find((item) => item.page_number === pageNumber);
+    const range = (result.pages || []).filter((page) => page.page_number >= pageStart && page.page_number <= pageEnd);
     return {
       id: result.id,
       label: SOURCE_LABELS[result.id] || result.label || result.id,
-      json: page ? JSON.stringify({
+      json: range.length ? JSON.stringify(range.map((page) => ({
         result_id: result.id,
         page_number: page.page_number,
         width: page.width,
@@ -192,9 +207,28 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
           bbox: region.bbox,
           text: textForRegion(region)
         }))
-      }, null, 2) : "本页 OCR 尚未加载"
+      })), null, 2) : "目标范围 OCR 将在提交时加载"
     };
-  }), [pageNumber, results]);
+  }), [pageEnd, pageStart, results]);
+  const chooseMode = (mode) => {
+    setRangeMode(mode);
+    if (mode === "single") {
+      setPageStart(pageNumber);
+      setPageEnd(pageNumber);
+    } else {
+      setPageStart(pageNumber);
+      setPageEnd(Math.min(lastAvailablePage, pageNumber + 1));
+    }
+  };
+  const changeStart = (value) => {
+    const next = Math.max(firstAvailablePage, Math.min(lastAvailablePage, Number(value) || firstAvailablePage));
+    setPageStart(next);
+    setPageEnd((current) => Math.max(next, Math.min(current, next + 4, lastAvailablePage)));
+  };
+  const changeEnd = (value) => {
+    const next = Math.max(pageStart, Math.min(lastAvailablePage, Number(value) || pageStart, pageStart + 4));
+    setPageEnd(next);
+  };
   const submit = async () => {
     if (!manualPrompt.trim() || running || !modelConfig?.configured) return;
     setRunning(true);
@@ -202,7 +236,8 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
     setHistoryOpen(false);
     setPromptHistory(rememberPrompt(projectId, manualPrompt));
     try {
-      const payload = await onConfirm(manualPrompt.trim());
+      await onEnsureRange?.(pageStart, pageEnd);
+      const payload = await onConfirm({ manualPrompt: manualPrompt.trim(), pageStart, pageEnd });
       setCandidate(payload.revision || null);
     } catch (reason) {
       setError(reason.message || "本页修订失败");
@@ -226,11 +261,23 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
   return <div className="page-revision-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !running) onClose(); }}>
     <section className="page-revision-dialog" role="dialog" aria-modal="true" aria-labelledby="page-revision-title">
       <header>
-        <div><h2 id="page-revision-title">{pageLabel(pageNumber)} 单页模型修订</h2><p>{modelConfig?.model || "当前项目模型未配置"}</p></div>
+        <div><h2 id="page-revision-title">{rangeLabel} 模型修订</h2><p>{modelConfig?.model || "当前项目模型未配置"}</p></div>
         <button className="icon-button" type="button" onClick={onClose} disabled={running} title="关闭"><X size={17} /></button>
       </header>
+      <section className="revision-range-control" aria-label="修订范围">
+        <div className="revision-range-modes" role="group" aria-label="选择单页或连续多页">
+          <button type="button" aria-pressed={rangeMode === "single"} disabled={running || Boolean(candidate)} onClick={() => chooseMode("single")}>当前页</button>
+          <button type="button" aria-pressed={rangeMode === "range"} disabled={running || Boolean(candidate)} onClick={() => chooseMode("range")}>连续多页</button>
+        </div>
+        {rangeMode === "range" ? <div className="revision-range-inputs">
+          <label><span>起始页</span><input type="number" min={firstAvailablePage} max={lastAvailablePage} value={pageStart} disabled={running || Boolean(candidate)} onChange={(event) => changeStart(event.target.value)} /></label>
+          <span aria-hidden="true">至</span>
+          <label><span>结束页</span><input type="number" min={pageStart} max={Math.min(lastAvailablePage, pageStart + 4)} value={pageEnd} disabled={running || Boolean(candidate)} onChange={(event) => changeEnd(event.target.value)} /></label>
+        </div> : null}
+        <p><strong>{rangeLabel}</strong><span>{pageEnd - pageStart + 1} 页 · {selectedEntries.length} 个相关条目</span>{rangeMode === "range" ? <small>单次最多 5 页，前后各一页作为只读边界证据</small> : null}</p>
+      </section>
       <div className="revision-source-grid">
-        <label className="revision-field revision-json-field"><span>本页结构 JSON</span><textarea readOnly value={pageJson} spellCheck="false" /></label>
+        <label className="revision-field revision-json-field"><span>目标范围结构 JSON</span><textarea readOnly value={pageJson} spellCheck="false" /></label>
         {ocrPages.map((source) => <label className="revision-field revision-json-field" key={source.id}><span>{source.label}</span><textarea readOnly value={source.json} spellCheck="false" /></label>)}
       </div>
       <div className="revision-field">
@@ -249,7 +296,7 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
         </div>
         <textarea ref={promptRef} autoFocus value={manualPrompt} onChange={(event) => setManualPrompt(event.target.value)} placeholder="说明本页需要重新判断或修正的内容" disabled={running || Boolean(candidate)} />
       </div>
-      <p className="revision-context-note">提交时会同时发送本页双 OCR、前后各一页只读证据、当前结构 JSON 和原有古籍整理提示词。</p>
+      <p className="revision-context-note">提交时会同时发送 {rangeLabel} 双 OCR、范围外前后各一页只读证据、当前结构 JSON 和原有古籍整理提示词。</p>
       {candidate ? <label className="revision-field revision-candidate-field"><span>调用后的候选 JSON <b>批准后才写入正式结果</b></span><textarea readOnly value={JSON.stringify(candidate.candidate, null, 2)} spellCheck="false" /></label> : null}
       {candidate?.diagnostics?.length ? <section className="revision-warning-list" aria-label="候选警告">
         <header><AlertTriangle size={15} /><strong>{candidate.diagnostics.length} 条警告</strong><span>不阻止预览和批准</span></header>
@@ -259,7 +306,7 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
       {!modelConfig?.configured ? <div className="page-revision-error" role="alert">当前项目没有可用的模型 API 配置。</div> : null}
       <footer><button className="button" type="button" onClick={onClose} disabled={running}>{candidate ? "暂不应用" : "取消"}</button>{candidate ? <><button className="button secondary" type="button" onClick={() => setPreviewOpen(true)} disabled={running || !candidate.preview_entries?.length}><Eye size={15} />预览排版</button><button className="button primary" type="button" onClick={apply} disabled={running}>{running ? <LoaderCircle className="spin" size={15} /> : <WandSparkles size={15} />}{running ? "正在应用" : "批准并应用"}</button></> : <button className="button primary" type="button" onClick={submit} disabled={running || !manualPrompt.trim() || !modelConfig?.configured}>{running ? <LoaderCircle className="spin" size={15} /> : <WandSparkles size={15} />}{running ? "正在生成" : "发送模型"}</button>}</footer>
     </section>
-    {previewOpen && candidate?.preview_entries?.length ? <RevisionPreviewDialog pageNumber={pageNumber} page={page} entries={candidate.preview_entries} results={results} links={links} onClose={() => setPreviewOpen(false)} /> : null}
+    {previewOpen && candidate?.preview_entries?.length ? <RevisionPreviewDialog pageStart={pageStart} pageEnd={pageEnd} pages={selectedPages} entries={candidate.preview_entries} results={results} links={links} onClose={() => setPreviewOpen(false)} /> : null}
   </div>;
 }
 
@@ -299,7 +346,7 @@ function ComparisonPanes({ pages, results, links = EMPTY_LINKS, activePage, rela
   </>;
 }
 
-export default function DatasetWorkspace({ data, onPageRequest = null, onRevisePage = null, onApplyPageRevision = null }) {
+export default function DatasetWorkspace({ data, onPageRequest = null, onRevisePage = null, onApplyPageRevision = null, onEnsureRange = null }) {
   const allPages = React.useMemo(() => [...(data.project?.source?.pages || data.results?.[0]?.pages || [])].sort((a, b) => a.page_number - b.page_number), [data]);
   const loadedPageNumbers = React.useMemo(() => new Set((data.results?.[0]?.pages || []).map((page) => page.page_number)), [data.results]);
   const pages = React.useMemo(() => allPages.filter((page) => loadedPageNumbers.has(page.page_number)), [allPages, loadedPageNumbers]);
@@ -361,6 +408,6 @@ export default function DatasetWorkspace({ data, onPageRequest = null, onReviseP
     <PageRail pages={allPages} activePage={activePage} onSelect={scrollPage} />
     <ComparisonPanes pages={pages} results={data.results || []} links={data.links} activePage={activePage} relatedRegions={relatedRegions} onPageVisible={pageVisible} onRegionEnter={regionEnter} onRegionLeave={regionLeave} onRegionClick={jumpFromRegion} entries={entries} activeEntry={activeEntry} relatedTargets={relatedTargets} onEntryVisible={entryVisible} onTargetEnter={targetEnter} onTargetLeave={targetLeave} onRevisionRequest={onRevisePage ? openRevision : null} />
     {hasEdition ? <StructureRail entries={entries} activeEntry={activeEntry} onSelect={scrollEntry} /> : null}
-    {revisionPage != null && onRevisePage && onApplyPageRevision ? <PageRevisionDialog projectId={data.project?.id} pageNumber={revisionPage} page={allPages.find((item) => item.page_number === revisionPage)} entries={entries.filter((entry) => entry.source_pages?.includes(revisionPage))} results={data.results || []} links={data.links || EMPTY_LINKS} modelConfig={data.model_config} onClose={() => setRevisionPage(null)} onConfirm={(manualPrompt) => onRevisePage({ pageNumber: revisionPage, manualPrompt })} onApply={onApplyPageRevision} /> : null}
+    {revisionPage != null && onRevisePage && onApplyPageRevision ? <PageRevisionDialog projectId={data.project?.id} pageNumber={revisionPage} pages={allPages} entries={entries} results={data.results || []} links={data.links || EMPTY_LINKS} modelConfig={data.model_config} onClose={() => setRevisionPage(null)} onConfirm={onRevisePage} onApply={onApplyPageRevision} onEnsureRange={onEnsureRange} /> : null}
   </div>;
 }
