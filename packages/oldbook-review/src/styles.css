@@ -207,7 +207,7 @@ button:disabled { cursor: default; opacity: .65; }
 .edition-target:hover, .edition-target.is-related { color: #064f53; background: #c9efeb; box-shadow: 0 0 0 3px #c9efeb; }
 
 .page-revision-backdrop { position: fixed; z-index: 300; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(25, 23, 20, .58); }
-.page-revision-dialog { display: grid; gap: 14px; width: 90vw; height: 90vh; padding: 18px; overflow-y: auto; color: #302c27; background: #fbfaf7; border: 1px solid #7e766c; border-radius: 6px; box-shadow: 0 22px 70px rgba(0, 0, 0, .3); }
+.page-revision-dialog { display: grid; grid-auto-rows: max-content; gap: 14px; width: 90vw; height: 90vh; padding: 18px; overflow-y: auto; color: #302c27; background: #fbfaf7; border: 1px solid #7e766c; border-radius: 6px; box-shadow: 0 22px 70px rgba(0, 0, 0, .3); }
 .page-revision-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .page-revision-dialog > header h2 { margin: 0; font-size: 17px; letter-spacing: 0; }
 .page-revision-dialog > header p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
@@ -218,6 +218,12 @@ button:disabled { cursor: default; opacity: .65; }
 .revision-field textarea { width: 100%; min-height: 96px; padding: 10px 11px; resize: vertical; color: #292621; background: #fff; border: 1px solid #cfc6b9; border-radius: 4px; font: 12px/1.55 "Cascadia Mono", Consolas, monospace; }
 .revision-field textarea:focus { outline: 2px solid rgba(13, 92, 97, .22); border-color: var(--accent); }
 .revision-prompt-heading { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+.revision-preset-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.revision-preset-options > button { display: grid; gap: 3px; min-width: 0; padding: 8px 9px; color: #4c463e; background: #f8f5ef; border: 1px solid #d5ccbf; border-radius: 4px; text-align: left; }
+.revision-preset-options > button:hover, .revision-preset-options > button:focus-visible { border-color: var(--accent); outline: none; }
+.revision-preset-options > button[aria-pressed="true"] { color: #0b5559; background: #e5f2f1; border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+.revision-preset-options strong { overflow: hidden; font-size: 11px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.revision-preset-options span { display: -webkit-box; overflow: hidden; color: #766e63; font-size: 9px; font-weight: 500; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .prompt-history-control { position: relative; }
 .prompt-history-menu { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; display: grid; width: min(460px, 70vw); max-height: 310px; overflow-y: auto; padding: 6px; background: #fffdf9; border: 1px solid #bdb3a5; border-radius: 5px; box-shadow: 0 12px 34px rgba(42, 36, 29, .22); }
 .prompt-history-menu > strong { padding: 7px 9px; color: #786f63; font-size: 10px; }
@@ -1054,12 +1060,25 @@ button:disabled { cursor: default; opacity: .65; }
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
   padding: 9px 12px;
   border-bottom: 1px solid #cfc4b5;
   background: #f7f4ee;
 }
+
+.workflow-preset-row { order: 10; display: flex; align-items: center; gap: 10px; flex: 1 0 100%; min-width: 0; padding-top: 8px; border-top: 1px solid #ddd4c8; }
+.workflow-preset-label { display: grid; grid-template-columns: 16px auto; align-items: center; gap: 2px 6px; flex: 0 0 128px; color: #4d463e; }
+.workflow-preset-label svg { grid-row: 1 / 3; }
+.workflow-preset-label strong { font-size: 11px; }
+.workflow-preset-label small { color: var(--muted); font-size: 9px; }
+.workflow-preset-options { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 6px; flex: 1; min-width: 0; }
+.workflow-preset-options > button { display: flex; align-items: baseline; gap: 6px; min-width: 0; min-height: 32px; padding: 6px 8px; color: #4e473e; background: #fff; border: 1px solid #d2c7b9; border-radius: 4px; text-align: left; }
+.workflow-preset-options > button:hover, .workflow-preset-options > button:focus-visible { border-color: var(--accent); outline: none; }
+.workflow-preset-options > button[aria-pressed="true"] { color: #0b5559; background: #e5f2f1; border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+.workflow-preset-options strong { flex: 0 0 auto; font-size: 10px; white-space: nowrap; }
+.workflow-preset-options span { overflow: hidden; color: #81786c; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
 .api-state {
   display: flex;

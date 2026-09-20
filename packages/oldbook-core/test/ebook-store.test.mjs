@@ -10,6 +10,10 @@ test("model JSON parser accepts fenced and surrounding content", () => {
   assert.deepEqual(parseModelJson("回答如下：{\"entries\":[],\"issues\":[]}"), { entries: [], issues: [] });
 });
 
+test("model JSON parser rejects a truncated candidate instead of treating it as empty", () => {
+  assert.throws(() => parseModelJson('{"entries":[{"title":"未完成"}]'), /Expected|JSON/);
+});
+
 test("ebook prompt uses the current title and supports broad poetry genres", () => {
   const prompt = buildEbookPrompt("詞稿測試", [], [], "人工曾将『雨集』校为『疑雨集』");
   assert.match(prompt, /詞稿測試/);
@@ -30,6 +34,19 @@ test("ebook prompt uses the current title and supports broad poetry genres", () 
   assert.match(prompt, /不得用注文补成八句/);
   assert.match(prompt, /“陆游诗：……”或“李贺诗：……”不加书名号/);
   assert.doesNotMatch(prompt, /疑雨集注/);
+});
+
+test("batch follow-up prompt is appended as the highest-priority instruction", () => {
+  const prompt = buildEbookPrompt("Book", [], [], "", {
+    current_entries: [{ id: "entry-0201", title: "前序候选", source_pages: [201] }],
+    manual_prompt: "重点复核注文锚点。"
+  });
+  assert.match(prompt, /上一工作流步骤在本批页范围内生成的候选 JSON/);
+  assert.match(prompt, /前序候选/);
+  assert.match(prompt, /不要只输出差异/);
+  assert.match(prompt, /后续校订步骤（最高优先级）/);
+  assert.match(prompt, /不得把这段要求原样写入正文或 issues/);
+  assert.ok(prompt.endsWith("重点复核注文锚点。"));
 });
 
 test("classic poetry prompt restores the early generic workflow with full boundary context", () => {

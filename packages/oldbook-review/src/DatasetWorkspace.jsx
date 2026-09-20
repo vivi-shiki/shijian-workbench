@@ -9,6 +9,7 @@ import {
   seriesOrdinal
 } from "./ebook-format.js";
 import { recentPrompts, rememberPrompt } from "./prompt-history.js";
+import { REVISION_PRESETS } from "./revision-presets.js";
 
 const SOURCE_LABELS = { "paddleocr-vl": "PaddleOCR-VL", "pp-ocrv6": "PP-OCRv6" };
 const EMPTY_LINKS = { by_region: {}, by_target: {} };
@@ -242,6 +243,9 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
               {promptHistory.length ? promptHistory.slice(0, 10).map((record, index) => <button type="button" role="menuitem" key={`${record.used_at || "legacy"}-${index}`} onClick={() => { setManualPrompt(record.prompt); setHistoryOpen(false); requestAnimationFrame(() => promptRef.current?.focus()); }} title={record.prompt}><span>{record.prompt}</span></button>) : <p>尚无已发送的提示词</p>}
             </div> : null}
           </div>
+        </div>
+        <div className="revision-preset-options" role="group" aria-label="预设修订目标">
+          {REVISION_PRESETS.map((preset) => <button type="button" key={preset.id} aria-pressed={manualPrompt === preset.prompt} disabled={running || Boolean(candidate)} onClick={() => { setManualPrompt(preset.prompt); requestAnimationFrame(() => promptRef.current?.focus()); }} title={preset.prompt}><strong>{preset.label}</strong><span>{preset.summary}</span></button>)}
         </div>
         <textarea ref={promptRef} autoFocus value={manualPrompt} onChange={(event) => setManualPrompt(event.target.value)} placeholder="说明本页需要重新判断或修正的内容" disabled={running || Boolean(candidate)} />
       </div>

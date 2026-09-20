@@ -6,6 +6,7 @@ import {
   Check,
   CircleDot,
   KeyRound,
+  ListChecks,
   LoaderCircle,
   Play,
   RotateCw,
@@ -20,6 +21,7 @@ import {
   proseParagraphs,
   seriesOrdinal
 } from "./ebook-format.js";
+import { REVISION_PRESETS, revisionPreset } from "./revision-presets.js";
 
 const KIND_LABELS = {
   heading: "目录标题",
@@ -93,6 +95,7 @@ export default function EbookWorkspace({ project }) {
   const [endPage, setEndPage] = React.useState(Math.min(30, project.pages.length));
   const [model, setModel] = React.useState("");
   const [forceRun, setForceRun] = React.useState(false);
+  const [workflowPresetId, setWorkflowPresetId] = React.useState("");
   const [batchCandidate, setBatchCandidate] = React.useState(null);
   const editVersion = React.useRef(0);
   const appliedVersion = React.useRef(0);
@@ -304,6 +307,7 @@ export default function EbookWorkspace({ project }) {
     setError("");
     setJsonError("");
     try {
+      const workflowPreset = revisionPreset(workflowPresetId);
       const response = await fetch(`/api/projects/${project.id}/ebook/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -313,6 +317,9 @@ export default function EbookWorkspace({ project }) {
           end_page: endPage,
           model,
           force: forceRun,
+          workflow_step_id: workflowPreset?.id || "",
+          manual_prompt: workflowPreset?.prompt || "",
+          base_candidate_run_id: workflowPreset ? batchCandidate?.run_id || "" : "",
           validation_mode: "warnings",
           max_attempts: 1
         })
@@ -369,6 +376,7 @@ export default function EbookWorkspace({ project }) {
   const generation = document.generation || {};
   const totalPages = Math.max(1, (document.source?.page_range?.end || endPage) - (document.source?.page_range?.start || startPage) + 1);
   const completed = Math.max(0, (generation.completed_through || 0) - (document.source?.page_range?.start || startPage) + 1);
+  const workflowPreset = revisionPreset(workflowPresetId);
 
   return (
     <main className="ebook-workspace">
@@ -386,6 +394,12 @@ export default function EbookWorkspace({ project }) {
             </label>
           ))}
         </div>
+        <div className="workflow-preset-row">
+          <span className="workflow-preset-label"><ListChecks size={15} /><strong>后续校订</strong><small>按当前页范围生成候选</small></span>
+          <div className="workflow-preset-options" role="group" aria-label="预设后续工作流步骤">
+            {REVISION_PRESETS.map((preset) => <button type="button" key={preset.id} aria-pressed={workflowPresetId === preset.id} disabled={running} onClick={() => { setWorkflowPresetId(current => current === preset.id ? "" : preset.id); setForceRun(true); }} title={preset.prompt}><strong>{preset.label}</strong><span>{preset.summary}</span></button>)}
+          </div>
+        </div>
         <label className="compact-field">起页<input type="number" min="1" max={project.pages.length} value={startPage}
           onChange={event => setStartPage(Math.max(1, Number(event.target.value) || 1))} disabled={running} /></label>
         <label className="compact-field">止页<input type="number" min={startPage} max={project.pages.length} value={endPage}
@@ -398,7 +412,7 @@ export default function EbookWorkspace({ project }) {
         <button className="button primary ebook-run" onClick={runBatch}
           disabled={running || !config?.configured || !resultIds.length || startPage > endPage}>
           {running ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
-          {running ? "正在分批整理" : `运行 ${startPage}–${endPage} 页`}
+          {running ? "正在分批整理" : workflowPreset ? `${workflowPreset.label} · ${startPage}–${endPage} 页` : `运行 ${startPage}–${endPage} 页`}
         </button>
         {!config?.configured && <p className="api-hint">在项目根目录的 <code>.env.local</code> 填写 <code>SILICONFLOW_API_KEY</code>，然后重启 API。</p>}
         {batchCandidate && <div className="generation-progress">

@@ -780,7 +780,9 @@ function validateClassicChunk(document, payload, options) {
   }
 }
 
-export function buildEbookPrompt(documentTitle, pageBundles, previousEntries, learningContext = "") {
+export function buildEbookPrompt(documentTitle, pageBundles, previousEntries, learningContext = "", options = {}) {
+  const manualPrompt = asText(options.manual_prompt);
+  const currentEntries = Array.isArray(options.current_entries) ? options.current_entries : [];
   const expected = {
     entries: [{
       action: "create|continue",
@@ -837,7 +839,9 @@ export function buildEbookPrompt(documentTitle, pageBundles, previousEntries, le
     `allowed_evidence_ids：${JSON.stringify(allowedEvidence)}`,
     `target_pages：${JSON.stringify(targetPages)}`,
     `context_before（正文已隔离，只用于说明页序）：${JSON.stringify(contextSummary(contextBefore))}`,
-    `context_after（正文已隔离，只用于说明页序）：${JSON.stringify(contextSummary(contextAfter))}`
+    `context_after（正文已隔离，只用于说明页序）：${JSON.stringify(contextSummary(contextAfter))}`,
+    currentEntries.length ? `上一工作流步骤在本批页范围内生成的候选 JSON：${JSON.stringify(currentEntries)}\n请以它作为本轮复核起点，保留其中已有证据支持且不属于本轮问题的结构与文字；仍须根据双 OCR 独立核对，不得把候选本身当作原文证据。输出完整的本批条目，不要只输出差异。` : "",
+    manualPrompt ? "人工选择的后续校订步骤（最高优先级）：\n在不突破目标页范围、来源证据和 JSON 输出格式的前提下，重点执行以下复核要求。不得把这段要求原样写入正文或 issues。\n" + manualPrompt : ""
   ].join("\n");
 }
 
@@ -910,11 +914,16 @@ async function bestCandidateCheckpoint(history, projectId, criteria) {
     if (!entry.isDirectory()) continue;
     try {
       const run = await history.readRun(projectId, entry.name);
+      if (criteria.workflowStepId !== undefined &&
+          asText(run.manifest.options?.workflow_step_id) !== criteria.workflowStepId) continue;
+      if (criteria.baseCandidateRunId !== undefined &&
+          asText(run.manifest.options?.base_candidate_run_id) !== criteria.baseCandidateRunId) continue;
       const documents = run.steps.filter(step => step.kind === "structure-candidate-checkpoint" && step.candidate_document)
         .map(step => step.candidate_document);
       if (run.output && run.manifest.status === "failed") documents.push(run.output);
       for (const output of documents) {
-        if (output.generation?.pipeline !== criteria.pipeline || output.generation?.chunk_size !== criteria.chunkSize) continue;
+        // A checkpoint is a complete document through completed_through; later chunks may safely use a smaller size.
+        if (output.generation?.pipeline !== criteria.pipeline) continue;
         if (output.source?.page_range?.start !== criteria.start || output.source?.page_range?.end !== criteria.end) continue;
         if ((output.source?.result_ids || []).join(",") !== criteria.resultIds.join(",")) continue;
         const completedThrough = Number(output.generation?.completed_through) || criteria.start - 1;
@@ -1350,6 +1359,18 @@ export class EbookStore {
         throw Object.assign(new Error(`不支持的生成流程：${pipeline}`), { status: 400 });
       }
       const model = asText(options.model) || (pipeline === CLASSIC_POETRY_PIPELINE ? CLASSIC_POETRY_MODEL : config.model);
+      const manualPrompt = asText(options.manual_prompt);
+      const workflowStepId = asText(options.workflow_step_id);
+      const baseCandidateRunId = asText(options.base_candidate_run_id);
+      if (manualPrompt.length > 6000) {
+        throw Object.assign(new Error("后续校订提示词不能超过 6000 字"), { status: 400 });
+      }
+      if (manualPrompt && pipeline === TRI_PASS_PIPELINE) {
+        throw Object.assign(new Error("tri-pass-regions-v1 暂不支持后续校订预设"), { status: 400 });
+      }
+      if (baseCandidateRunId && pipeline !== "single-pass-v1") {
+        throw Object.assign(new Error("候选链后续校订目前只支持 single-pass-v1"), { status: 400 });
+      }
       const policy = warningOnlyGenerationPolicy();
       const validationMode = policy.validation_mode;
       const maxAttempts = policy.max_attempts;
@@ -1362,11 +1383,28 @@ export class EbookStore {
         throw Object.assign(new Error("chunk_size 必须是 1-20 的整数"), { status: 400 });
       }
       const formalDocument = (await this.read(id)).document;
-      const checkpoint = [TRI_PASS_PIPELINE, CLASSIC_POETRY_PIPELINE].includes(pipeline) && options.resume_candidate !== false
+      const baseCandidate = baseCandidateRunId
+        ? await this.candidates?.get(id, baseCandidateRunId, { includeDocument: true })
+        : null;
+      if (baseCandidate && baseCandidate.state !== "awaiting_approval") {
+        throw Object.assign(new Error(`上一步候选状态为 ${baseCandidate.state}，不能继续校订`), { status: 409 });
+      }
+      if (baseCandidate && baseCandidate.baseline_hash !== hashJson(formalDocument)) {
+        throw Object.assign(new Error("正式结果已变化，不能从旧候选继续校订"), { status: 409 });
+      }
+      if (baseCandidate && !force) {
+        throw Object.assign(new Error("候选链后续校订必须启用覆盖范围重跑"), { status: 400 });
+      }
+      const checkpoint = options.resume_candidate !== false
         ? await bestCandidateCheckpoint(this.history, id, { pipeline, chunkSize, start, end, resultIds,
+          workflowStepId: workflowStepId || "", baseCandidateRunId: baseCandidateRunId || "",
           resumeThrough: Number.isInteger(Number(options.resume_through)) ? Number(options.resume_through) : null })
         : null;
-      document = checkpoint ? structuredClone(checkpoint.document) : formalDocument;
+      document = checkpoint ? structuredClone(checkpoint.document)
+        : baseCandidate ? structuredClone(baseCandidate.candidate_document) : formalDocument;
+      const inheritedEntries = baseCandidate
+        ? structuredClone(document.entries.filter(entry => entry.source_pages.some(page => page >= start && page <= end)))
+        : [];
       if (checkpoint) {
         document.generation.open_entries = (document.generation.open_entries || []).filter(entryId => {
           const entry = document.entries.find(item => item.id === entryId);
@@ -1396,13 +1434,21 @@ export class EbookStore {
 
       runRecord = await this.history?.startRun(id, {
         actor: "ai:siliconflow", source: "deepseek-structure", provider: "siliconflow", model,
-        note: force ? "覆盖指定页范围重新结构化" : "分批结构化",
+        note: manualPrompt ? `后续校订步骤${workflowStepId ? `：${workflowStepId}` : ""}` : force ? "覆盖指定页范围重新结构化" : "分批结构化",
         options: { result_ids: resultIds, start_page: start, end_page: end, force,
           include_learning_context: options.include_learning_context !== false,
           chunk_size: chunkSize, context_overlap: DEFAULT_CONTEXT_OVERLAP,
           adaptive_single_page_fallback: pipeline !== CLASSIC_POETRY_PIPELINE, pipeline,
-          validation_mode: validationMode, max_attempts: maxAttempts },
+          validation_mode: validationMode, max_attempts: maxAttempts,
+          workflow_step_id: workflowStepId || null, manual_prompt: manualPrompt || null,
+          base_candidate_run_id: baseCandidateRunId || null },
         input: { document: documentBeforeRun, learning_context: learningContext,
+          manual_prompt: manualPrompt || null,
+          base_candidate: baseCandidate ? {
+            run_id: baseCandidateRunId,
+            candidate_hash: baseCandidate.candidate_hash,
+            baseline_hash: baseCandidate.baseline_hash
+          } : null,
           candidate_checkpoint: checkpoint ? { run_id: checkpoint.run_id, completed_through: checkpoint.completed_through } : null }
       });
 
@@ -1421,6 +1467,7 @@ export class EbookStore {
         chunks: resumeAt === start ? [] : (document.generation.chunks || []),
         open_entries: resumeAt === start ? [] : (document.generation.open_entries || []),
         resumed_from_run: checkpoint?.run_id || null,
+        base_candidate_run_id: baseCandidateRunId || null,
         started_at: now(),
         updated_at: now(),
         error: ""
@@ -1499,8 +1546,10 @@ export class EbookStore {
               ? "你是中国诗词类古籍整理专家，只返回符合要求的 JSON 对象。"
               : "你是中国诗歌类古籍整理专家，只返回符合要求的 JSON 对象。" },
             { role: "user", content: classic
-              ? buildClassicPoetryPrompt(bundles, previousEntries)
-              : buildEbookPrompt(project.source?.book_title || project.title, bundles, previousEntries, learningContext) }
+              ? buildClassicPoetryPrompt(bundles, previousEntries, { manual_prompt: manualPrompt })
+              : buildEbookPrompt(project.source?.book_title || project.title, bundles, previousEntries, learningContext,
+                { manual_prompt: manualPrompt, current_entries: inheritedEntries.filter(entry =>
+                  entry.source_pages.some(page => page >= pageStart && page <= pageEnd)) }) }
           ];
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           const messages = baseMessages;
@@ -1515,6 +1564,19 @@ export class EbookStore {
           let validation;
           try {
             parsed = parseModelJson(response.content);
+          } catch (error) {
+            if (!error.diagnostics) error.diagnostics = [{ code: "invalid_candidate", message: error.message }];
+            validation = { ok: false, mode: "parse", warnings: error.diagnostics, entries: 0 };
+            if (runRecord) {
+              await this.history.recordRunStep(id, runRecord.id, {
+                kind: "structure-chunk", start_page: pageStart, end_page: pageEnd, attempt,
+                request: { model, messages }, response: { content: response.content, parsed: null, usage: response.usage },
+                validation
+              });
+            }
+            throw error;
+          }
+          try {
             if (classic) {
               trimClassicContextOutput(parsed, bundles, pageStart, pageEnd, document);
               attachPageEvidenceRefs(parsed, bundles);
@@ -1524,7 +1586,6 @@ export class EbookStore {
             });
           } catch (error) {
             if (!error.diagnostics) error.diagnostics = [{ code: "invalid_candidate", message: error.message }];
-            parsed ||= { entries: [], issues: [] };
             validation = { ok: true, mode: "warnings", bypassed: true, warnings: error.diagnostics,
               entries: Array.isArray(parsed.entries) ? parsed.entries.length : 0 };
           }
@@ -1624,6 +1685,8 @@ export class EbookStore {
         result_ids: resultIds,
         model,
         pipeline,
+        workflow_step_id: workflowStepId || null,
+        base_candidate_run_id: baseCandidateRunId || null,
         validation: finalValidation
       });
       if (runRecord) await this.history.finishRun(id, runRecord.id, {
