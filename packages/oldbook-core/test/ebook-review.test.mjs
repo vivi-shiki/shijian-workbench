@@ -52,12 +52,12 @@ test("three-round limit, changed-rule gate and frozen tests are enforced", async
   assert.equal(w.calls.length, 3);
 });
 
-test("apply requires approval, rechecks independent tests and detects stale production", async t => {
+test("apply requires approval, detects stale production, and retains failed checks as warnings", async t => {
   const w = await workspace(t);
   const generated = await w.review.generate("book", task(), { config: w.config });
   const store = new EbookStore(w.root, { index: async () => ({ id: "book" }) }, w.history);
   const approval = { candidate_hash: generated.candidate_hash, note: "Explicit test approval" };
-  await assert.rejects(w.review.apply("book", generated.run_id, {}, store), /approval/);
+  await assert.rejects(w.review.apply("book", generated.run_id, {}, store), /candidate_hash/);
   const stale = structuredClone(w.document); stale.title = "Human edit";
   await fs.writeFile(w.filename, JSON.stringify(stale));
   await assert.rejects(w.review.apply("book", generated.run_id, approval, store), { status: 409 });
@@ -66,7 +66,9 @@ test("apply requires approval, rechecks independent tests and detects stale prod
   const failing = suite(); failing.cases[0].expect.line_count = 8;
   const report = await w.review.evaluate("book", generated.run_id, failing);
   assert.equal(report.mechanical_pass, false);
-  await assert.rejects(w.review.apply("book", generated.run_id, approval, store), /failed evaluation/);
+  const applied = await w.review.apply("book", generated.run_id, approval, store);
+  assert.deepEqual(applied.document.entries, generated.candidate.entries);
+  assert.ok(applied.candidate.warnings.length > 0);
 });
 
 test("approved apply uses shared save and attaches run attribution", async t => {
@@ -77,11 +79,15 @@ test("approved apply uses shared save and attaches run attribution", async t => 
   store.running.add("book");
   await assert.rejects(w.review.apply("book", generated.run_id, approval, store), { status: 409 });
   store.running.clear();
-  const applied = await w.review.apply("book", generated.run_id, approval, store);
+  const applied = await w.review.apply("book", generated.run_id, approval, store,
+    { actor: "ai:codex", channel: "agent", requested_by: "human" });
   assert.deepEqual(applied.document.entries, generated.candidate.entries);
-  assert.ok((await w.history.readRun("book", generated.run_id)).steps.some(s => s.kind === "human-approval"));
+  assert.ok((await w.history.readRun("book", generated.run_id)).steps.some(s => s.kind === "candidate-approval"));
   const history = await w.history.read("book");
-  assert.ok(history.events.some(e => e.run_id === generated.run_id && e.source === "approved-ebook-candidate"));
+  const event = history.events.find(e => e.run_id === generated.run_id && e.source === "approved-ebook-candidate");
+  assert.equal(event.actor.id, "ai:codex");
+  assert.equal(event.metadata.channel, "agent");
+  assert.equal(event.metadata.requested_by, "human");
 });
 
 test("run artifacts cannot be edited unnoticed", async t => {

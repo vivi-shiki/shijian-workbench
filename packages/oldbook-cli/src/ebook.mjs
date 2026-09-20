@@ -7,16 +7,21 @@ import { EbookReview } from "../../oldbook-core/src/ebook-review.mjs";
 import { safeId } from "../../oldbook-core/src/project-store.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const help = `Usage: node packages/oldbook-cli/src/ebook.mjs <generate|evaluate|apply> --project <id> [options]
+const help = `Usage: node packages/oldbook-cli/src/ebook.mjs <generate|evaluate|list|show|approve|apply|abandon> --project <id> [options]
 
 generate --task <task.json> [--cases <cases.json>] [--previous <run-id>]
          [--skill <SKILL.md>] [--model <model-id>]
   One external-model call; candidate only. Retries require changed rules/code; maximum 3 rounds.
 evaluate --run <run-id> [--cases <cases.json>]
   Offline evaluation. Never calls a model or changes production JSON.
-apply    --run <run-id> --approve <candidate-sha256> --note <human-approval>
+list     [--state awaiting_approval|approved|abandoned] [--limit 50]
+show     --run <run-id>
+approve  --run <run-id> --approve <candidate-sha256> --note <explicit-approval>
+apply    Alias for approve.
+abandon  --run <run-id> --note <reason>
          [--api http://127.0.0.1:3100]
-  Requires the local API, explicit approval, passing checks and an unchanged baseline.
+  Candidate commands use the local API. Approval requires a matching hash and unchanged baseline.
+  Agent calls should add --actor ai:codex --channel agent --requested-by human.
 
 See packages/oldbook-cli/README.md for task modes, evidence and regression cases.`;
 
@@ -24,20 +29,29 @@ async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, project: { type: "string" }, task: { type: "string" },
     cases: { type: "string" }, previous: { type: "string" }, skill: { type: "string" }, model: { type: "string" },
-    run: { type: "string" }, approve: { type: "string" }, note: { type: "string" }, api: { type: "string" }
+    run: { type: "string" }, approve: { type: "string" }, note: { type: "string" }, api: { type: "string" },
+    state: { type: "string" }, limit: { type: "string" }, actor: { type: "string" }, channel: { type: "string" },
+    "requested-by": { type: "string" }
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const [command] = positionals;
   const allowed = {
     generate: ["project", "task", "cases", "previous", "skill", "model"],
     evaluate: ["project", "run", "cases"],
-    apply: ["project", "run", "approve", "note", "api"]
+    list: ["project", "state", "limit", "api"],
+    show: ["project", "run", "api"],
+    approve: ["project", "run", "approve", "note", "api", "actor", "channel", "requested-by"],
+    apply: ["project", "run", "approve", "note", "api", "actor", "channel", "requested-by"],
+    abandon: ["project", "run", "note", "api", "actor", "channel", "requested-by"]
   };
   if (positionals.length !== 1 || !allowed[command] || Object.keys(values).some(k => !allowed[command].includes(k))) {
     throw new Error(help);
   }
   const projectId = safeId(values.project);
-  const required = command === "generate" ? ["task"] : command === "apply" ? ["run", "approve", "note"] : ["run"];
+  const required = command === "generate" ? ["task"]
+    : ["approve", "apply"].includes(command) ? ["run", "approve", "note"]
+      : command === "abandon" ? ["run", "note"]
+        : command === "list" ? [] : ["run"];
   for (const key of required) if (!values[key]?.trim()) throw new Error(`Missing --${key}`);
   const projects = path.join(root, "data/projects");
   const review = new EbookReview(projects, new HistoryStore(projects), { skillPath: values.skill });
@@ -61,12 +75,37 @@ async function main() {
     if (!report.mechanical_pass) process.exitCode = 1;
   } else {
     const api = (values.api || "http://127.0.0.1:3100").replace(/\/$/, "");
-    const response = await fetch(`${api}/api/projects/${projectId}/ebook/candidates/${encodeURIComponent(values.run)}/apply`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ candidate_hash: values.approve, note: values.note }), signal: AbortSignal.timeout(60_000)
-    });
-    if (!response.ok) throw new Error(`Apply HTTP ${response.status}: ${await response.text()}`);
-    console.log(JSON.stringify({ project_id: projectId, run_id: values.run, status: "applied" }));
+    const base = `${api}/api/projects/${projectId}/ebook/candidates`;
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Oldbook-Actor": values.actor || "human",
+      "X-Oldbook-Source": "oldbook-cli",
+      "X-Oldbook-Channel": values.channel || "cli",
+      "X-Oldbook-Requested-By": values["requested-by"] || (values.actor?.startsWith("ai:") ? "unspecified" : "human")
+    };
+    let url = base;
+    let init = { headers, signal: AbortSignal.timeout(60_000) };
+    if (command === "list") {
+      const query = new URLSearchParams();
+      if (values.state) query.set("state", values.state);
+      if (values.limit) query.set("limit", values.limit);
+      url += query.size ? `?${query}` : "";
+    } else if (command === "show") {
+      url += `/${encodeURIComponent(values.run)}`;
+    } else {
+      const action = command === "abandon" ? "abandon" : "approve";
+      url += `/${encodeURIComponent(values.run)}/${action}`;
+      init = { ...init, method: "POST", body: JSON.stringify({
+        ...(action === "approve" ? { candidate_hash: values.approve } : {}),
+        note: values.note,
+        channel: values.channel || "cli",
+        requested_by: values["requested-by"] || (values.actor?.startsWith("ai:") ? "unspecified" : "human")
+      }) };
+    }
+    const response = await fetch(url, init);
+    const body = await response.text();
+    if (!response.ok) throw new Error(`${command} HTTP ${response.status}: ${body}`);
+    console.log(JSON.stringify(JSON.parse(body), null, 2));
   }
 }
 

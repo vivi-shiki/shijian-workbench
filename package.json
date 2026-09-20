@@ -14,6 +14,8 @@
     "ebook:generate": "node packages/oldbook-cli/src/ebook.mjs generate",
     "ebook:evaluate": "node packages/oldbook-cli/src/ebook.mjs evaluate",
     "ebook:apply": "node packages/oldbook-cli/src/ebook.mjs apply",
+    "ebook:candidates": "node packages/oldbook-cli/src/ebook.mjs list",
+    "mcp": "node packages/oldbook-mcp/src/server.mjs",
     "history:bootstrap": "node packages/oldbook-cli/src/history.mjs bootstrap",
     "history:begin": "node packages/oldbook-cli/src/history.mjs begin",
     "history:commit": "node packages/oldbook-cli/src/history.mjs commit",

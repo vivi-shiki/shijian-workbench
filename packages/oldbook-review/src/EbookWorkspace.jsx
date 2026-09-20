@@ -93,6 +93,7 @@ export default function EbookWorkspace({ project }) {
   const [endPage, setEndPage] = React.useState(Math.min(30, project.pages.length));
   const [model, setModel] = React.useState("");
   const [forceRun, setForceRun] = React.useState(false);
+  const [batchCandidate, setBatchCandidate] = React.useState(null);
   const editVersion = React.useRef(0);
   const appliedVersion = React.useRef(0);
   const previewPaneRef = React.useRef(null);
@@ -302,9 +303,6 @@ export default function EbookWorkspace({ project }) {
     setRunning(true);
     setError("");
     setJsonError("");
-    const poll = window.setInterval(() => {
-      loadDocument().catch(() => {});
-    }, 2000);
     try {
       const response = await fetch(`/api/projects/${project.id}/ebook/run`, {
         method: "POST",
@@ -321,14 +319,46 @@ export default function EbookWorkspace({ project }) {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "诗歌类古籍结构化任务失败");
-      applyPayload(payload);
-      appliedVersion.current = editVersion.current;
-      setSaveState("saved");
+      setBatchCandidate(payload.candidate || null);
+      await loadDocument();
     } catch (err) {
       setError(err.message);
       await loadDocument().catch(() => {});
     } finally {
-      window.clearInterval(poll);
+      setRunning(false);
+    }
+  }
+
+  async function approveBatchCandidate() {
+    if (!batchCandidate?.run_id || running) return;
+    setRunning(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/projects/${project.id}/ebook/candidates/${encodeURIComponent(batchCandidate.run_id)}/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Oldbook-Actor": "human",
+          "X-Oldbook-Source": "web-batch-generation",
+          "X-Oldbook-Channel": "web",
+          "X-Oldbook-Requested-By": "human"
+        },
+        body: JSON.stringify({
+          candidate_hash: batchCandidate.candidate_hash,
+          note: `在结构化界面明确批准 ${startPage}-${endPage} 页候选`,
+          channel: "web",
+          requested_by: "human"
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "候选批准失败");
+      applyPayload(payload);
+      setBatchCandidate(null);
+      appliedVersion.current = editVersion.current;
+      setSaveState("saved");
+    } catch (err) {
+      setError(err.message);
+    } finally {
       setRunning(false);
     }
   }
@@ -371,6 +401,13 @@ export default function EbookWorkspace({ project }) {
           {running ? "正在分批整理" : `运行 ${startPage}–${endPage} 页`}
         </button>
         {!config?.configured && <p className="api-hint">在项目根目录的 <code>.env.local</code> 填写 <code>SILICONFLOW_API_KEY</code>，然后重启 API。</p>}
+        {batchCandidate && <div className="generation-progress">
+          <span>候选等待批准</span>
+          <strong>{batchCandidate.summary?.changes ?? 0} 项变化 / {batchCandidate.warnings?.length || 0} 条警示</strong>
+          <button className="button primary" type="button" onClick={approveBatchCandidate} disabled={running}>
+            <Check size={16} />批准并应用
+          </button>
+        </div>}
         {generation.status !== "not_started" && (
           <div className="generation-progress">
             <span>{generation.status === "complete" ? "已完成" : generation.status === "failed" ? "上次失败，可续跑" : "处理中"}</span>

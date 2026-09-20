@@ -44,13 +44,13 @@ npm run dev
 ## 诗歌古籍结构化（第二步）
 
 命令行模块已按 OCR、维护和样本分组。反馈修订统一使用
-`packages/oldbook-cli/src/ebook.mjs` 的 `generate → evaluate → apply` 候选流程，详见
+`packages/oldbook-cli/src/ebook.mjs` 的 `generate → evaluate → approve` 候选流程，详见
 [命令行模块说明](packages/oldbook-cli/README.md)。
-此流程不直接覆盖正文；下述首页首次生成流程仍按批保存，两者暂未合并。
+网页首次生成、单页修订、CLI 和 MCP 均使用相同的候选批准事务，不会由模型直接覆盖正式正文。
 
 首页顶部的工作流 Tab 分为“1 双 OCR 与校对”和“2 诗歌古籍结构化”。第二步读取第一步已经修改并保存的
-`edited_text`，可选择最多两套 OCR 结果互校。任务每 5 个核心页调用一次模型，同时携带前后各 1 页作为跨页上下文；完成一组就写入
-`data/projects/<project-id>/ebook/structured.json`；中途失败后再次运行会从已完成页继续。
+`edited_text`，可选择最多两套 OCR 结果互校。任务每 5 个核心页调用一次模型，同时携带前后各 1 页作为跨页上下文；各组检查点和最终候选写入
+`history/runs/`，只有明确批准后才写入 `data/projects/<project-id>/ebook/structured.json`；中途失败后再次运行会从候选检查点继续。
 
 复制 `.env.example` 为 `.env.local`，只需填写硅基流动 API Key：
 
@@ -71,7 +71,11 @@ SILICONFLOW_MAX_TOKENS=8192
 GET  /api/projects/:projectId/ebook
 PUT  /api/projects/:projectId/ebook
 POST /api/projects/:projectId/ebook/run
-POST /api/projects/:projectId/ebook/candidates/:runId/apply
+POST /api/projects/:projectId/ebook/revise-page
+GET  /api/projects/:projectId/ebook/candidates
+GET  /api/projects/:projectId/ebook/candidates/:runId
+POST /api/projects/:projectId/ebook/candidates/:runId/approve
+POST /api/projects/:projectId/ebook/candidates/:runId/abandon
 GET  /api/projects/:projectId/history
 GET  /api/projects/:projectId/ai-memory
 ```

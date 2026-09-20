@@ -41,7 +41,7 @@ packages/oldbook-core/
 2. 编写任务 JSON：明确 `scope`、`category`、连续且按正文顺序排列的 `entry_ids`、`result_ids` 和提炼后的 `rules`。
 3. `generate` 只调用一次外部模型，只保存候选；不覆盖正式电子书。
 4. `evaluate` 离线评估，检查差异和未决问题；需要继续时先改规则，再用 `--previous` 接续，最多三轮。
-5. 用户明确批准具体候选后，才运行 `apply`。三轮失败保留候选，不自动转为 Codex 手修。
+5. 用户明确批准具体候选后，才运行 `approve`（`apply` 是兼容别名）。校验问题作为警示随候选展示，不阻断批准；三轮失败保留候选，不自动转为 Codex 手修。
 
 `examples/poetry-review.task.json` 是模板，运行前换成实际目标条目。
 `entry_ids` 是局部修订范围，不是强制保留的作品边界；`structure` 模式允许范围内拆分、合并。
@@ -75,8 +75,11 @@ npm run ebook:evaluate -- --project <project-id> --run <run-id> --cases <cases.j
 # 检查失败原因、修改规则或代码后，再发起一轮（不是自动重试三次）
 npm run ebook:generate -- --project <project-id> --task <task.json> --previous <run-id>
 
-# 仅明确批准后应用，需先启动本地 API：npm run api
-npm run ebook:apply -- --project <project-id> --run <run-id> --approve <candidate-sha256> --note "用户批准的具体范围"
+# 查看所有等待批准的候选，需先启动本地 API：npm run api
+npm run ebook:candidates -- --project <project-id> --state awaiting_approval
+
+# 仅明确批准后应用；Agent 代执行时必须如实记录 actor/channel/requested-by
+node packages/oldbook-cli/src/ebook.mjs approve --project <project-id> --run <run-id> --approve <candidate-sha256> --note "用户批准的具体范围" --actor ai:codex --channel agent --requested-by human
 ```
 
 `generate`/`evaluate` 不依赖本地 API；`apply` 通过默认 `http://127.0.0.1:3100` 的共享保存接口执行。
@@ -98,7 +101,7 @@ npm run ebook:apply -- --project <project-id> --run <run-id> --approve <candidat
 同一轮的文件不可手工编辑；读取时检查哈希。一次只操作同一 run，勿并发向其追加日志。
 续跑保留冻结的初始 OCR 和基线，并将前轮候选作为修订输入；已有断言不能删改，附加断言会沿用到下一轮。
 新增回归断言也计入版本变化，但仍需先弄清失败原因，不应靠无关用例消耗三轮次数。
-应用会重新执行初始和附加验收，检查正式基线未变化，并与编辑器保存串行执行；生成进行中拒绝应用。
+应用会重新执行初始和附加验收并把失败项保留为警示，同时检查候选哈希与正式基线，并与编辑器保存串行执行；生成进行中拒绝应用。
 批准事件关联原生成 run，记录为人工批准 AI 候选，只有保存时间戳会在应用时更新。
 
 机械验收覆盖结构、范围、页码、近体诗句数和字数、标点、格式化字符保真、注码越界及指定案例。
@@ -122,5 +125,4 @@ npm run ebook:apply -- --project <project-id> --run <run-id> --approve <candidat
   这是旧字段兼容迁移，不能用来自动确定正确注码，执行前停 API 并备份。
 - `migrate_projects.mjs` 移入 `maintenance/`，仍是会写入的旧数据迁移，需明确授权后单独执行。
 
-本次整理针对脚本修订流程。首页的首次结构化按钮仍走既有 `/ebook/run`，按批直接保存，
-尚未接入候选审批界面；反馈迭代请使用上述候选命令，不能把旧按钮当作候选生成器。
+首页的首次结构化、单页修订、CLI 和 MCP 都使用同一候选生命周期。`/ebook/run` 只生成候选；正式结果只能通过统一批准事务写入。

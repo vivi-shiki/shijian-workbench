@@ -6,6 +6,7 @@ import { buildEbookRules, parseModelJson } from "./ebook-store.mjs";
 import { hashJson, diffJson } from "./change-history.mjs";
 import { safeId } from "./project-store.mjs";
 import { evaluateCandidate, validateCases } from "./ebook-evaluation.mjs";
+import { EbookCandidates } from "./ebook-candidates.mjs";
 
 const SOURCE = "ebook-candidate";
 
@@ -101,6 +102,7 @@ export class EbookReview {
     this.root = projectsRoot;
     this.history = history;
     this.fetch = fetchImpl;
+    this.candidates = new EbookCandidates(history);
     this.skillPath = skillPath || path.join(os.homedir(), ".codex/skills/oldbook-poetry-structuring/SKILL.md");
   }
 
@@ -213,11 +215,11 @@ export class EbookReview {
       const payload = parseModelJson(body.choices?.[0]?.message?.content || "");
       const candidate = assembleCandidate(current || frozen.baseline, roundTask, payload);
       const evaluation = evaluateCandidate(frozen.baseline, candidate, task, suite);
-      const output = { candidate, candidate_hash: hashJson(candidate), baseline_hash: hashJson(frozen.baseline),
+      const output = { kind: "ebook-candidate", candidate, candidate_hash: hashJson(candidate), baseline_hash: hashJson(frozen.baseline),
         diff: diffJson(frozen.baseline, candidate),
         entry_order: { before: frozen.baseline.entries.map(e => e.id), after: candidate.entries.map(e => e.id) },
         evaluation, model_issues: payload.issues, versions };
-      await this.history.finishRun(projectId, run.id, { status: evaluation.status, output });
+      await this.history.finishRun(projectId, run.id, { status: "awaiting_approval", output });
       return { run_id: run.id, round, ...output };
     } catch (error) {
       const message = error.message.replaceAll(apiKey, "[REDACTED]");
@@ -237,26 +239,7 @@ export class EbookReview {
     return report;
   }
 
-  async apply(projectId, runId, approval, ebookStore) {
-    const run = await this.history.readRun(projectId, runId);
-    if (run.manifest.source !== SOURCE || !run.output?.candidate) throw new Error("No candidate to apply");
-    const { candidate, baseline_hash: baselineHash, candidate_hash: candidateHash } = run.output;
-    if (hashJson(candidate) !== candidateHash || approval?.candidate_hash !== candidateHash ||
-        typeof approval.note !== "string" || !approval.note.trim()) {
-      throw Object.assign(new Error("Explicit approval note and matching candidate_hash are required"), { status: 400 });
-    }
-    const suites = [run.input.suite, ...run.steps.filter(s => s.kind === "independent-evaluation").map(s => s.suite)];
-    for (const suite of suites) {
-      const report = evaluateCandidate(run.input.frozen.baseline, candidate, run.input.task, suite);
-      if (!report.mechanical_pass) throw Object.assign(new Error("Candidate failed evaluation; cannot apply"), { status: 400 });
-    }
-    // Use the live API's shared store so saves serialize with editor writes and the active generation guard.
-    const result = await ebookStore.save(projectId, structuredClone(candidate), {
-      actor: "human", source: "approved-ebook-candidate", note: approval.note,
-      expected_hash: baselineHash, run_id: runId,
-      metadata: { candidate_hash: candidateHash, generated_by: "ai:siliconflow", approval: "explicit" }
-    });
-    await this.history.recordRunStep(projectId, runId, { kind: "human-approval", note: approval.note, candidate_hash: candidateHash });
-    return result;
+  async apply(projectId, runId, approval, ebookStore, audit = {}) {
+    return this.candidates.approve(projectId, runId, approval, ebookStore, audit);
   }
 }

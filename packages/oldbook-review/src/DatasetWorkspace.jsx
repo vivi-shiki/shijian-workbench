@@ -214,7 +214,7 @@ function PageRevisionDialog({ projectId, pageNumber, page, entries, results, lin
     setRunning(true);
     setError("");
     try {
-      await onApply(candidate.run_id);
+      await onApply({ runId: candidate.run_id, candidateHash: candidate.candidate_hash });
       onClose();
     } catch (reason) {
       setError(reason.message || "候选应用失败");

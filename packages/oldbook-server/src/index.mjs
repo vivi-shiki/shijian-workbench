@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { HistoryStore } from "../../oldbook-core/src/change-history.mjs";
 import { EbookStore } from "../../oldbook-core/src/ebook-store.mjs";
-import { EbookReview } from "../../oldbook-core/src/ebook-review.mjs";
+import { EbookCandidates } from "../../oldbook-core/src/ebook-candidates.mjs";
 import { ProjectStore } from "../../oldbook-core/src/project-store.mjs";
 import { DatasetStore } from "../../oldbook-core/src/dataset-store.mjs";
 
@@ -18,7 +18,7 @@ const projectsRoot = path.join(rootDir, "data", "projects");
 const historyStore = new HistoryStore(projectsRoot);
 const store = new ProjectStore(projectsRoot, historyStore);
 const ebookStore = new EbookStore(projectsRoot, store, historyStore);
-const ebookReview = new EbookReview(projectsRoot, historyStore);
+const ebookCandidates = new EbookCandidates(historyStore);
 const datasetStore = new DatasetStore(projectsRoot, rootDir);
 
 const app = express();
@@ -71,7 +71,10 @@ function auditFromRequest(req, defaults = {}) {
   const source = /^[a-z0-9][a-z0-9-]{0,79}$/i.test(requestedSource)
     ? requestedSource
     : defaults.source || "api";
-  return { actor, source, note: String(req.get("x-oldbook-note") || "").slice(0, 500) };
+  const channel = String(req.get("x-oldbook-channel") || defaults.channel || "api").slice(0, 40);
+  const requestedBy = String(req.get("x-oldbook-requested-by") || defaults.requested_by || "").slice(0, 80);
+  return { actor, source, channel, requested_by: requestedBy,
+    note: String(req.get("x-oldbook-note") || "").slice(0, 500) };
 }
 
 async function readProject(projectId, resultId) {
@@ -303,11 +306,34 @@ app.post("/api/projects/:projectId/ebook/revise-page", async (req, res) => {
 });
 
 app.post("/api/projects/:projectId/ebook/revise-page/:runId/apply", async (req, res) => {
-  res.json(await ebookStore.applyPageRevision(safeProjectId(req.params.projectId), req.params.runId, req.body));
+  res.json(await ebookCandidates.approve(safeProjectId(req.params.projectId), req.params.runId, req.body, ebookStore,
+    auditFromRequest(req, { actor: "human", source: "web-page-revision", channel: "web", requested_by: "human" })));
 });
 
 app.post("/api/projects/:projectId/ebook/candidates/:runId/apply", async (req, res) => {
-  res.json(await ebookReview.apply(safeProjectId(req.params.projectId), req.params.runId, req.body, ebookStore));
+  res.json(await ebookCandidates.approve(safeProjectId(req.params.projectId), req.params.runId, req.body, ebookStore,
+    auditFromRequest(req, { actor: "human", source: "legacy-candidate-apply" })));
+});
+
+app.get("/api/projects/:projectId/ebook/candidates", async (req, res) => {
+  res.json({ candidates: await ebookCandidates.list(safeProjectId(req.params.projectId), {
+    state: req.query.state || null,
+    limit: req.query.limit
+  }) });
+});
+
+app.get("/api/projects/:projectId/ebook/candidates/:runId", async (req, res) => {
+  res.json(await ebookCandidates.get(safeProjectId(req.params.projectId), req.params.runId));
+});
+
+app.post("/api/projects/:projectId/ebook/candidates/:runId/approve", async (req, res) => {
+  res.json(await ebookCandidates.approve(safeProjectId(req.params.projectId), req.params.runId, req.body, ebookStore,
+    auditFromRequest(req, { actor: "human", source: "candidate-api" })));
+});
+
+app.post("/api/projects/:projectId/ebook/candidates/:runId/abandon", async (req, res) => {
+  res.json(await ebookCandidates.abandon(safeProjectId(req.params.projectId), req.params.runId, req.body,
+    auditFromRequest(req, { actor: "human", source: "candidate-api" })));
 });
 
 app.get("/api/projects/:projectId/history", async (req, res) => {

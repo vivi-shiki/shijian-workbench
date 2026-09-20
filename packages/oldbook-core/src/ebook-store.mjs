@@ -3,6 +3,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { atomicJson, safeId } from "./project-store.mjs";
 import { hashJson } from "./change-history.mjs";
+import { buildCandidateOutput, EbookCandidates } from "./ebook-candidates.mjs";
 import { validateGeneratedChunk, validateGeneratedDocument } from "./ebook-generation-validation.mjs";
 import {
   buildAnnotationReviewPrompt,
@@ -1043,6 +1044,7 @@ export class EbookStore {
     this.projectsRoot = projectsRoot;
     this.projectStore = projectStore;
     this.history = history;
+    this.candidates = history ? new EbookCandidates(history) : null;
     this.running = new Set();
     this.writes = new Map();
   }
@@ -1261,11 +1263,10 @@ export class EbookStore {
           validation: { ok: true, mode: "warnings", diagnostics }
         });
       }
-      const candidateOutput = {
+      const candidateOutput = buildCandidateOutput({
         kind: "manual-page-revision-candidate",
-        baseline_hash: hashJson(formalDocument),
-        candidate_hash: hashJson(document),
-        candidate_document: document,
+        baseline: formalDocument,
+        candidate: document,
         candidate_payload: parsed,
         page_number: pageNumber,
         manual_prompt: manualPrompt,
@@ -1275,8 +1276,9 @@ export class EbookStore {
         created_entry_ids: applied.created_entry_ids,
         deleted_entry_ids: applied.deleted_entry_ids,
         added_issue_ids: applied.added_issue_ids,
-        diagnostics
-      };
+        diagnostics,
+        warnings: diagnostics
+      });
       if (runRecord) {
         await this.history.finishRun(id, runRecord.id, {
           status: "awaiting_approval",
@@ -1289,6 +1291,7 @@ export class EbookStore {
           page_number: pageNumber,
           model,
           run_id: runRecord?.id || null,
+          candidate_hash: candidateOutput.candidate_hash,
           candidate: parsed,
           preview_entries: document.entries.filter(entry => entry.source_pages?.includes(pageNumber)),
           updated_entry_ids: applied.updated_entry_ids,
@@ -1312,57 +1315,12 @@ export class EbookStore {
   }
 
   async applyPageRevision(projectId, runId, approval = {}) {
-    const id = safeId(projectId);
-    if (!this.history) throw Object.assign(new Error("当前项目没有历史记录服务"), { status: 500 });
-    const run = await this.history.readRun(id, safeId(runId));
-    if (run.manifest.source !== "manual-page-revision" || run.manifest.status !== "awaiting_approval" ||
-        run.output?.kind !== "manual-page-revision-candidate") {
-      throw Object.assign(new Error("该运行不是等待批准的单页修订候选"), { status: 409 });
-    }
-    const current = (await this.read(id)).document;
-    if (hashJson(current) !== run.output.baseline_hash) {
-      throw Object.assign(new Error("正式结果在候选生成后已经变化，请重新生成本页候选"), { status: 409 });
-    }
-    const candidate = structuredClone(run.output.candidate_document);
-    if (hashJson(candidate) !== run.output.candidate_hash) {
-      throw Object.assign(new Error("单页修订候选完整性校验失败"), { status: 409 });
-    }
-    const note = asText(approval.note) || `批准应用 P${run.output.page_number} 单页模型修订候选`;
-    const saved = await this.save(id, candidate, {
-      actor: "human",
-      source: "approved-manual-page-revision",
-      note,
-      run_id: runId,
-      expected_hash: run.output.baseline_hash,
-      metadata: {
-        page_number: run.output.page_number,
-        model: run.output.model,
-        manual_prompt: run.output.manual_prompt,
-        candidate_hash: run.output.candidate_hash,
-        approval: "explicit",
-        updated_entry_ids: run.output.updated_entry_ids,
-        created_entry_ids: run.output.created_entry_ids,
-        deleted_entry_ids: run.output.deleted_entry_ids,
-        added_issue_ids: run.output.added_issue_ids
-      }
+    if (!this.candidates) throw Object.assign(new Error("当前项目没有历史记录服务"), { status: 500 });
+    return this.candidates.approve(projectId, runId, approval, this, {
+      actor: approval.actor || "human",
+      channel: approval.channel || "web",
+      requested_by: approval.requested_by || "human"
     });
-    await this.history.finishRun(id, runId, {
-      status: "complete",
-      output: { ...run.output, applied_at: now(), approval: "explicit" }
-    });
-    return {
-      ...saved,
-      revision: {
-        page_number: run.output.page_number,
-        model: run.output.model,
-        run_id: runId,
-        updated_entry_ids: run.output.updated_entry_ids,
-        created_entry_ids: run.output.created_entry_ids,
-        deleted_entry_ids: run.output.deleted_entry_ids,
-        added_issue_ids: run.output.added_issue_ids,
-        diagnostics: run.output.diagnostics
-      }
-    };
   }
 
   async run(projectId, options = {}) {
@@ -1657,13 +1615,37 @@ export class EbookStore {
       document.generation.status = "complete";
       document.generation.validation = finalValidation;
       document.generation.updated_at = now();
-      await atomicJson(this.filename(id), document);
-      await this.history?.recordChange({ projectId: id, target: { kind: "ebook" }, before: documentBeforeRun, after: document,
-        actor: "ai:siliconflow", source: "deepseek-structure", operation: "run_completed",
-        note: "DeepSeek 整理完成；所有校验诊断作为警示保留", runId: runRecord?.id,
-        metadata: { start_page: start, end_page: end, validation: finalValidation } });
-      if (runRecord) await this.history.finishRun(id, runRecord.id, { status: "complete", output: document });
-      return { document, config };
+      const candidateOutput = buildCandidateOutput({
+        kind: "ebook-generation-candidate",
+        baseline: documentBeforeRun,
+        candidate: document,
+        warnings: finalValidation.warnings,
+        page_range: { start, end },
+        result_ids: resultIds,
+        model,
+        pipeline,
+        validation: finalValidation
+      });
+      if (runRecord) await this.history.finishRun(id, runRecord.id, {
+        status: "awaiting_approval",
+        output: candidateOutput
+      });
+      return {
+        document: formalDocument,
+        config,
+        candidate: {
+          run_id: runRecord?.id || null,
+          kind: candidateOutput.kind,
+          state: "awaiting_approval",
+          candidate_hash: candidateOutput.candidate_hash,
+          baseline_hash: candidateOutput.baseline_hash,
+          candidate_document: document,
+          diff: candidateOutput.diff,
+          warnings: candidateOutput.warnings,
+          summary: { page_range: candidateOutput.page_range, entries: document.entries.length,
+            changes: candidateOutput.diff.length }
+        }
+      };
     } catch (error) {
       if (document) {
         document.generation = { ...document.generation, status: "failed", error: error.message, updated_at: now() };

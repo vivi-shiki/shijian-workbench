@@ -131,11 +131,22 @@ function App() {
     return payload;
   }, [projectId]);
 
-  const applyPageRevision = React.useCallback(async (runId) => {
-    const response = await fetch(`/api/projects/${projectId}/ebook/revise-page/${encodeURIComponent(runId)}/apply`, {
+  const applyPageRevision = React.useCallback(async ({ runId, candidateHash }) => {
+    const response = await fetch(`/api/projects/${projectId}/ebook/candidates/${encodeURIComponent(runId)}/approve`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note: "在只读校对界面批准单页模型修订候选" })
+      headers: {
+        "Content-Type": "application/json",
+        "X-Oldbook-Actor": "human",
+        "X-Oldbook-Source": "web-page-revision",
+        "X-Oldbook-Channel": "web",
+        "X-Oldbook-Requested-By": "human"
+      },
+      body: JSON.stringify({
+        candidate_hash: candidateHash,
+        note: "在页面校对界面明确批准单页模型修订候选",
+        channel: "web",
+        requested_by: "human"
+      })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || payload.message || "单页修订候选应用失败");
