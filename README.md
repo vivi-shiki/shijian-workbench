@@ -1,4 +1,52 @@
-# 诗歌类古籍 OCR 与结构化工作台
+# 诗笺 · shijian-workbench
+
+**诗笺**是一套面向中国古籍的 AI 辅助 OCR 工作流：把古籍扫描件或照片变成可校对、可结构化、可追溯的电子文本。它把多模型 OCR、人工校对、大语言模型结构化和修改历史串成一个本地闭环，尤其适合诗集、词集、曲集、诗文合集，以及带笺注、评点的选本。
+
+> 仓库只包含源代码、配置模板和文档。书影图片、PDF、OCR 结果、项目数据和密钥都留在本地，不会上传。
+
+## 它能做什么
+
+- **页面准备**：把 PDF 渲染为页面图，或把手机拍摄的书页旋正、裁切为页面图。
+- **多模型 OCR**：支持 `ndlkotenocr-lite`、PaddleOCR-VL，以及任意 OpenAI-compatible 视觉模型服务，可并排比较多套结果。
+- **人工校对工作台**：在浏览器里看图、选框、改字、调整阅读顺序、标记已校对。
+- **AI 结构化**：用大语言模型识别目录层级、诗作、组诗、词曲、序跋、传记与注文关系，生成候选结果，经人工批准后才写入正式正文。
+- **可追溯的修改历史**：每次 OCR 修订和结构化编辑都记入追加式事件流，可冻结为数据集，作为后续训练和评测的证据。
+- **导出**：TXT、Markdown、HTML 和完整 JSON。
+
+## 技术栈
+
+| 层 | 技术 |
+| --- | --- |
+| 校对前端 | React 19 + Vite |
+| 本地服务与 CLI | Node.js（ES Modules），内置 `node:test` 测试 |
+| OCR 流水线 | Python 3、PyMuPDF、ndlkotenocr-lite、PaddleOCR-VL（可选，本地或远程） |
+| 结构化模型 | OpenAI-compatible API（默认硅基流动 DeepSeek） |
+| Agent 接入 | `packages/oldbook-skills` 中的 SKILL 说明，预留 MCP 适配层 |
+
+## 快速开始
+
+需要 Node.js 20+（开发使用 22）和 Python 3.10+。
+
+```powershell
+git clone https://github.com/vivi-shiki/shijian-workbench.git
+cd shijian-workbench
+npm install
+copy .env.example .env.local   # 填写 SILICONFLOW_API_KEY 等配置
+npm run dev
+```
+
+启动后打开 `http://127.0.0.1:5173/?project=<project-id>`。项目数据放在本地的 `data/projects/<project-id>/` 下（已被 `.gitignore` 排除），可以用 `npm run project:build` 或 `npm run volume:prepare` 从 PDF 或照片生成。运行测试：
+
+```powershell
+npm test          # Node 侧单元测试
+npm run test:ocr  # Python OCR 流水线测试
+```
+
+下文是更详细的使用说明。
+
+---
+
+## 适用范围
 
 这个项目面向以诗歌为主要内容的中国古籍，包括诗集、词集、曲集、诗文合集，以及带笺注、评点的选本。《疑雨集注》仅是当前验证样本，不是产品内置书目或固定模板。
 
@@ -42,6 +90,9 @@ npm run dev
 打开 `http://127.0.0.1:5173/?project=<project-id>`。如果省略 `project`，程序优先选择 `OLDBOOK_PROJECT_ID` 指定的项目，其次选择第一个未归档项目。
 
 ## 诗歌古籍结构化（第二步）
+
+生产流程统一为 `single-pass-v1` 初稿、SKILL 候选复核、人工批准。
+`classic-poetry-v1` 与 `tri-pass-regions-v1` 已废弃并拒绝新任务，仅保留历史实现以读取旧日志。
 
 命令行模块已按 OCR、维护和样本分组。反馈修订统一使用
 `packages/oldbook-cli/src/ebook.mjs` 的 `generate → evaluate → approve` 候选流程，详见

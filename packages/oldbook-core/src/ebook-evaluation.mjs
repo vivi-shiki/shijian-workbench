@@ -51,17 +51,26 @@ export function evaluateCandidate(baseline, candidate, task, suite = null) {
   const failures = [];
   const warnings = ["Semantic fidelity, work boundaries and note anchors still require human review."];
   const fail = (code, details) => failures.push({ code, ...details });
+  const targetIds = new Set(task.entry_ids);
+  let baselineSchemaError = null;
+  try { validateEbook(baseline, baseline.project_id); }
+  catch (error) { baselineSchemaError = error.message; }
   try { validateEbook(candidate, baseline.project_id); }
   catch (error) {
-    fail("schema", { message: error.message });
-    return { status: "failed", mechanical_pass: false, failures, warnings, cases: [] };
+    const inheritedOutsideTarget = error.message === baselineSchemaError &&
+      ![...targetIds].some(id => error.message.includes(id));
+    if (inheritedOutsideTarget) {
+      warnings.push(`Inherited schema failure outside this task: ${error.message}`);
+    } else {
+      fail("schema", { message: error.message });
+      return { status: "failed", mechanical_pass: false, failures, warnings, cases: [] };
+    }
   }
   if (candidate.entries.some(e => !e || !Array.isArray(e.source_pages) || !Array.isArray(e.notes) ||
       e.notes.some(n => !n || typeof n.text !== "string") || !Array.isArray(e.lines) || e.lines.some(l => typeof l !== "string"))) {
     fail("schema", { message: "Invalid entry arrays or note text" });
     return { status: "failed", mechanical_pass: false, failures, warnings, cases: [] };
   }
-  const targetIds = new Set(task.entry_ids);
   const outside = baseline.entries.filter(e => !targetIds.has(e.id));
   const outsideIds = new Set(outside.map(e => e.id));
   if (!isDeepStrictEqual(outside, candidate.entries.filter(e => outsideIds.has(e.id)))) fail("outside_scope_changed", {});

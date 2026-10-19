@@ -57,9 +57,28 @@ test("formatting preserves characters, note anchors and fields outside its mode"
 });
 
 test("oracle assertions and raw feedback do not leak into model messages", () => {
-  const messages = buildReviewMessages("Book", { ...task(), raw_feedback: "RAW-SECRET", expect: "ORACLE-SECRET" }, [entry()], []);
+  const messages = buildReviewMessages("Book", { ...task(), raw_feedback: "RAW-SECRET", expect: "ORACLE-SECRET" }, [entry()], [], [],
+    [{ code: "schema", entry_id: "entry-0001", message: "note offset is invalid" }]);
   assert.doesNotMatch(JSON.stringify(messages), /RAW-SECRET|ORACLE-SECRET/);
   assert.match(JSON.stringify(messages), /Check boundaries/);
+  assert.match(JSON.stringify(messages), /不相容且证据不足时清空 form/);
+  assert.match(JSON.stringify(messages), /line 和 offset 均不得越界/);
+  assert.match(JSON.stringify(messages), /不得静默丢弃目标中已有的正文或注文/);
+  assert.match(JSON.stringify(messages), /previous_mechanical_failures/);
+  assert.match(JSON.stringify(messages), /note offset is invalid/);
+  assert.match(JSON.stringify(messages), /title_is_first_line 必须通过独立题名证据解决/);
+});
+
+test("schema failures inherited outside the target are warnings, not local failures", () => {
+  const book = baseline();
+  book.entries.push({ ...entry("entry-0003"), title: "范围外", source_pages: [3],
+    notes: [{ text: "原注", position: { field: "lines", line: 1, offset: 99 } }] });
+  const next = structuredClone(book);
+  const report = evaluateCandidate(book, next, task());
+  assert.equal(report.mechanical_pass, true);
+  assert.ok(report.warnings.some(warning => warning.includes("Inherited schema failure outside this task")));
+  const targeted = { ...task(), entry_ids: ["entry-0003"] };
+  assert.equal(evaluateCandidate(book, next, targeted).mechanical_pass, false);
 });
 
 test("candidate assembly enforces identity and leaves model errors visible to evaluation", () => {

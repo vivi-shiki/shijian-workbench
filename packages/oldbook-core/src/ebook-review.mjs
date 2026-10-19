@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { buildEbookRules, parseModelJson } from "./ebook-store.mjs";
 import { hashJson, diffJson } from "./change-history.mjs";
 import { safeId } from "./project-store.mjs";
-import { evaluateCandidate, validateCases } from "./ebook-evaluation.mjs";
+import { evaluateCandidate, textCharacters, validateCases } from "./ebook-evaluation.mjs";
 import { EbookCandidates } from "./ebook-candidates.mjs";
 
 const SOURCE = "ebook-candidate";
@@ -35,6 +35,7 @@ export function validateTask(task) {
   safeId(task.id);
   task.entry_ids.forEach(safeId);
   task.result_ids.forEach(safeId);
+  if (task.base_candidate_run_id != null) safeId(task.base_candidate_run_id);
   return task;
 }
 
@@ -46,7 +47,7 @@ function selectedEntries(document, task) {
   return document.entries.slice(indexes[0], indexes.at(-1) + 1);
 }
 
-export function buildReviewMessages(title, task, entries, evidence, context = []) {
+export function buildReviewMessages(title, task, entries, evidence, context = [], previousFailures = []) {
   const mode = {
     structure: "依据来源重新判读本范围作品边界，可拆分、合并条目；已有条目保留 id，新条目 id 为空字符串。新增或改动的字句必须有证据，不以格律猜补。",
     notes: "只调整 notes[].text 中的标点和空白，不改变文字序列、条目数量或顺序、注释数量或顺序、position 以及任何其他字段。",
@@ -59,15 +60,71 @@ export function buildReviewMessages(title, task, entries, evidence, context = []
     "本次是局部修订，必须返回 {entries:[本次全部目标条目的完整对象],issues:[仍待核对的说明字符串]}。条目字段与输入一致。",
     "只处理 targets，context_entries 及 context_only 页仅供理解边界，不输出或修改它们。source_pages 必须来自 targets 的来源页。",
     "不根据上一候选或模型自己的推断冒充人工定论；不自动补空字段、修复越界注码或省略未修改的目标。",
+    "结构拆分、合并或重排不得静默丢弃目标中已有的正文或注文。判定某段属于另一作品时，应依据 OCR 将它放入正确条目；新条目 id 使用空字符串。若证据不足，保留原文并在 issues 说明，不得仅删除后声称它不在 targets。",
+    "若输入含 previous_mechanical_failures，必须在返回前逐项验证这些失败已消除；它们只是校验诊断而非标准答案。title_is_first_line 必须通过独立题名证据解决，没有证据就清空 title。相邻条目正文重复时必须依据页面位置判定是重复识别还是两次刊印，不能仅在 issues 声称疑似重复而原样返回。",
     "请执行下列经分析后的约束，不要猜测未提供的答案：",
-    ...task.rules
+    ...task.rules,
+    "返回 JSON 前做最终自检：目标内每个近体诗的 form、句数、每句字数必须相容；不相容且证据不足时清空 form 并在 issues 说明。逐条验证 notes[].position 指向现存字段，line 和 offset 均不得越界；若本次改动影响正文或题名，必须依据来源重新定位注码。"
   ].join("\n");
   // Evaluator expectations and raw human feedback are deliberately not part of this allowlisted payload.
   return [
     { role: "system", content: instruction },
     { role: "user", content: JSON.stringify({ title, task: { mode: task.mode, category: task.category },
-      targets: entries, context_entries: context, evidence }) }
+      targets: entries, context_entries: context, evidence,
+      previous_mechanical_failures: previousFailures.map(({ code, entry_id, message, expected, actual }) =>
+        ({ code, entry_id, message, expected, actual })) }) }
   ];
+}
+
+function demoteInvalidFixedForms(candidate, targetIds, modelIssues) {
+  const ids = new Set(targetIds);
+  const repairs = [];
+  for (const entry of candidate.entries) {
+    if (!ids.has(entry.id) || entry.kind !== "poem" || typeof entry.form !== "string") continue;
+    const match = /^(五|七)(?:言)?(绝|絕|律)$/.exec(entry.form);
+    if (!match) continue;
+    const lines = entry.lines.filter(line => textCharacters(line));
+    const expectedCount = match[2] === "律" ? 8 : 4;
+    const expectedWidth = match[1] === "五" ? 5 : 7;
+    if (lines.length === expectedCount && lines.every(line => [...textCharacters(line)].length === expectedWidth)) continue;
+    const claimed = entry.form;
+    entry.form = "";
+    const message = `${entry.id} 的体裁“${claimed}”与句数或句宽不相容，程序已保留正文并清空 form，待人工复核。`;
+    modelIssues.push(message);
+    repairs.push({ entry_id: entry.id, claimed_form: claimed });
+  }
+  return repairs;
+}
+
+function clampInvalidNotePositions(candidate, targetIds, modelIssues) {
+  const ids = new Set(targetIds);
+  const repairs = [];
+  for (const entry of candidate.entries) {
+    if (!ids.has(entry.id) || !Array.isArray(entry.notes)) continue;
+    for (let index = 0; index < entry.notes.length; index += 1) {
+      const note = entry.notes[index];
+      const position = note?.position;
+      if (!position || !["lines", "title", "series"].includes(position.field)) continue;
+      let next;
+      if (position.field === "lines" && entry.lines.length) {
+        const line = Math.max(1, Math.min(entry.lines.length, Number(position.line) || 1));
+        next = { field: "lines", line,
+          offset: Math.max(0, Math.min([...entry.lines[line - 1]].length, Number(position.offset) || 0)) };
+      } else if (position.field === "title") {
+        next = { field: "title",
+          offset: Math.max(0, Math.min([...entry.title].length, Number(position.offset) || 0)) };
+      } else if (position.field === "series" && entry.series?.title) {
+        next = { field: "series",
+          offset: Math.max(0, Math.min([...entry.series.title].length, Number(position.offset) || 0)) };
+      }
+      if (!next || isDeepStrictEqual(next, position)) continue;
+      note.position = next;
+      const message = `${entry.id} 的第 ${index + 1} 条注释 position 超出当前文本边界，程序已收缩到有效边界，语义位置待人工复核。`;
+      modelIssues.push(message);
+      repairs.push({ entry_id: entry.id, note_index: index, before: position, after: next });
+    }
+  }
+  return repairs;
 }
 
 export function assembleCandidate(baseline, task, payload) {
@@ -110,8 +167,18 @@ export class EbookReview {
 
   async snapshot(projectId, task) {
     const directory = path.join(this.root, safeId(projectId));
-    const baseline = await this.json(path.join(directory, "ebook/structured.json"));
-    if (baseline.project_id !== projectId) throw new Error("Project identity mismatch");
+    const productionBaseline = await this.json(path.join(directory, "ebook/structured.json"));
+    if (productionBaseline.project_id !== projectId) throw new Error("Project identity mismatch");
+    let baseline = productionBaseline;
+    let baseCandidate = null;
+    if (task.base_candidate_run_id) {
+      baseCandidate = await this.candidates.get(projectId, task.base_candidate_run_id, { includeDocument: true });
+      if (baseCandidate.state !== "awaiting_approval") throw new Error("Base candidate is no longer awaiting approval");
+      if (baseCandidate.baseline_hash !== hashJson(productionBaseline)) {
+        throw new Error("Base candidate no longer matches the production baseline");
+      }
+      baseline = baseCandidate.candidate_document;
+    }
     const entries = selectedEntries(baseline, task);
     const corePages = new Set(entries.flatMap(e => e.source_pages));
     if (!corePages.size || [...corePages].some(p => !Number.isInteger(p) || p < 1)) throw new Error("Targets need valid source pages");
@@ -141,7 +208,19 @@ export class EbookReview {
       throw error;
     });
     // Existing auto-summaries have no approval metadata, so retain their revision without feeding them as truth.
-    return { baseline, evidence, context, memory_revision: memory == null ? null : hashJson(memory) };
+    return {
+      baseline,
+      production_baseline: baseCandidate ? productionBaseline : null,
+      production_baseline_hash: hashJson(productionBaseline),
+      base_candidate: baseCandidate ? {
+        run_id: baseCandidate.run_id,
+        candidate_hash: baseCandidate.candidate_hash,
+        kind: baseCandidate.kind
+      } : null,
+      evidence,
+      context,
+      memory_revision: memory == null ? null : hashJson(memory)
+    };
   }
 
   async versions(task, suite) {
@@ -166,8 +245,8 @@ export class EbookReview {
       previous = await this.history.readRun(projectId, previousRunId);
       if (previous.manifest.source !== SOURCE) throw new Error("Not a candidate run");
       const old = previous.input.task;
-      if (!isDeepStrictEqual([old.id, old.mode, old.scope, old.category, old.entry_ids, old.result_ids],
-          [task.id, task.mode, task.scope, task.category, task.entry_ids, task.result_ids])) {
+      if (!isDeepStrictEqual([old.id, old.mode, old.scope, old.category, old.entry_ids, old.result_ids, old.base_candidate_run_id || null],
+          [task.id, task.mode, task.scope, task.category, task.entry_ids, task.result_ids, task.base_candidate_run_id || null])) {
         throw new Error("Retry must keep the same task, scope and frozen sources");
       }
       round = previous.manifest.options.round + 1;
@@ -183,12 +262,15 @@ export class EbookReview {
       throw new Error("Change prompt rules, implementation or regression cases before another model round");
     }
     const currentFile = await this.json(path.join(this.root, projectId, "ebook/structured.json"));
-    if (hashJson(currentFile) !== hashJson(frozen.baseline)) throw new Error("Baseline changed; start a new task after reviewing current edits");
+    if (hashJson(currentFile) !== (frozen.production_baseline_hash || hashJson(frozen.baseline))) {
+      throw new Error("Baseline changed; start a new task after reviewing current edits");
+    }
     const outside = new Set(frozen.baseline.entries.filter(e => !task.entry_ids.includes(e.id)).map(e => e.id));
     const targets = (current || frozen.baseline).entries.filter(e => !outside.has(e.id));
     // Newly split IDs from the prior round can be retained without granting access to outside entries.
     const roundTask = { ...task, entry_ids: targets.map(e => e.id) };
-    const messages = buildReviewMessages(frozen.baseline.title, task, targets, frozen.evidence, frozen.context);
+    const messages = buildReviewMessages(frozen.baseline.title, task, targets, frozen.evidence, frozen.context,
+      previous?.output?.evaluation?.failures || []);
     versions.prompt_version = hashJson(messages);
     const apiKey = config.apiKey ?? process.env.SILICONFLOW_API_KEY;
     const baseUrl = (config.baseUrl ?? process.env.SILICONFLOW_BASE_URL ?? "https://api.siliconflow.cn/v1").replace(/\/$/, "");
@@ -214,11 +296,21 @@ export class EbookReview {
       const body = JSON.parse(raw);
       const payload = parseModelJson(body.choices?.[0]?.message?.content || "");
       const candidate = assembleCandidate(current || frozen.baseline, roundTask, payload);
+      const modelIssues = [...payload.issues];
+      const mechanicalRepairs = [
+        ...demoteInvalidFixedForms(candidate, roundTask.entry_ids, modelIssues),
+        ...clampInvalidNotePositions(candidate, roundTask.entry_ids, modelIssues)
+      ];
       const evaluation = evaluateCandidate(frozen.baseline, candidate, task, suite);
-      const output = { kind: "ebook-candidate", candidate, candidate_hash: hashJson(candidate), baseline_hash: hashJson(frozen.baseline),
-        diff: diffJson(frozen.baseline, candidate),
+      const productionBaseline = frozen.production_baseline || frozen.baseline;
+      const targetPages = [...new Set(targets.flatMap(entry => entry.source_pages || []))].sort((a, b) => a - b);
+      const output = { kind: "ebook-candidate", candidate, candidate_hash: hashJson(candidate),
+        baseline_hash: frozen.production_baseline_hash || hashJson(productionBaseline),
+        page_range: targetPages.length ? { start: targetPages[0], end: targetPages.at(-1) } : null,
+        base_candidate_run_id: frozen.base_candidate?.run_id || null,
+        diff: diffJson(productionBaseline, candidate),
         entry_order: { before: frozen.baseline.entries.map(e => e.id), after: candidate.entries.map(e => e.id) },
-        evaluation, model_issues: payload.issues, versions };
+        evaluation, model_issues: modelIssues, mechanical_repairs: mechanicalRepairs, versions };
       await this.history.finishRun(projectId, run.id, { status: "awaiting_approval", output });
       return { run_id: run.id, round, ...output };
     } catch (error) {

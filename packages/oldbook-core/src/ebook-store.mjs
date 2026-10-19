@@ -29,6 +29,19 @@ const DEFAULT_CONTEXT_OVERLAP = 1;
 const TRI_PASS_PIPELINE = "tri-pass-regions-v1";
 const CLASSIC_POETRY_PIPELINE = "classic-poetry-v1";
 const CLASSIC_POETRY_MODEL = "deepseek-ai/DeepSeek-V4-Flash";
+export const ACTIVE_EBOOK_PIPELINE = "single-pass-v1";
+export const DEPRECATED_EBOOK_PIPELINES = Object.freeze([CLASSIC_POETRY_PIPELINE, TRI_PASS_PIPELINE]);
+
+export function requireActiveEbookPipeline(value) {
+  const pipeline = asText(value) || ACTIVE_EBOOK_PIPELINE;
+  if (DEPRECATED_EBOOK_PIPELINES.includes(pipeline)) {
+    throw Object.assign(new Error(`${pipeline} 已废弃；新任务统一使用 ${ACTIVE_EBOOK_PIPELINE} 后接 SKILL 复核流程`), { status: 400 });
+  }
+  if (pipeline !== ACTIVE_EBOOK_PIPELINE) {
+    throw Object.assign(new Error(`不支持的生成流程：${pipeline}`), { status: 400 });
+  }
+  return pipeline;
+}
 function now() {
   return new Date().toISOString();
 }
@@ -579,9 +592,11 @@ export function buildEbookRules() {
     "6. 组诗必须拆成一首一个 poem 条目，并用相同 series.title、递增 series.index 和可确认的 series.total 关联。组诗总题只能写在 series.title；除非原书另有子题，各首 title 留空，禁止把总题或首句复制为每首题名。若版面上“感怀杂咏”一类总题只出现一次，后面连续多首诗都应写为 title=''、series.title='感怀杂咏'，不得让每首 poem 的 title 都重复“感怀杂咏”。只有版面确实再次印出同一题名时，才能新建同名 title。前台依据 series.index 显示“其一、其二”等中文序次，JSON 只记录数字。近体诗按每句字数、句数、偶数句押韵及版面题名共同判体：七绝为四个七言句，七律为八个七言句，五绝为四个五言句，五律为八个五言句。没有独立题名的连续作品不得用首句冒充题名，应结合上方总题建立 series。古体诗、乐府、词、曲、联句等须按原书题名、体式、分阕和版面边界处理，不得强行套用绝句或律诗句数。每首的 notes 必须紧随该首保存，不得汇总到组末。",
     "7. 序跋、传记等 prose 必须按文意添加现代中文标点，并按论旨转换、叙事阶段、评议、作序缘起和落款划分自然段，以两个换行符分段；不要按固定字数机械断句或分段。只能增加标点和空白，不得改变字词。无法确认的字或边界不要擅断，在 issues 中记录候选；不要使用 Markdown。",
     "8. 辨认题名必须结合字号、栏位、题名后的注文和下一题名位置，不得把正文首句当题名，也不得因换页把同一首诗拆开。较长题名按现代句意添加逗号、句号、冒号或引号；嵌在题名旁的小字注文仍进入 notes，不得混进 title。版面以连续方框、空格或明显缺刻表示缺字时，按每个缺字保留一个“□”，不得猜补。相邻题名之间若同时出现前作续文和后作正文，应按题名所在栏位及五七言句数分别归属；证据不足时保留原边界并写入 issues。",
+    "9. 输出前必须逐条执行字段一致性终检：form 若为五绝、七绝，lines 必须恰为四句且每句分别为五字、七字；form 若为五律、七律，lines 必须恰为八句且每句分别为五字、七字。证据不足以修正作品边界时，必须把 form 留空并写入 issues，不得返回已知与句数或字数冲突的体裁。任何拆句、合句、增删句或改题操作后，必须重新核对全部 notes[].position：line 必须指向现存诗句，offset 不得超过对应诗句、title 或 series.title 的 Unicode 字符数；只有来源证据支持时才移动注码，无法确定时保留有效锚点并写入 issues，严禁留下越界 position。",
   ];
 }
 
+/** @deprecated 仅用于解释旧运行记录；新任务使用 buildEbookPrompt。 */
 export function buildClassicPoetryPrompt(pageBundles, previousEntries, options = {}) {
   const manualPrompt = asText(options.manual_prompt);
   const revisionEntries = Array.isArray(options.current_entries) ? options.current_entries : null;
@@ -1392,10 +1407,7 @@ export class EbookStore {
       const pageCount = Math.min(...loaded.map(result => result.pages.length));
       const start = Math.max(1, Math.min(pageCount, Number(options.start_page) || 1));
       const end = Math.max(start, Math.min(pageCount, Number(options.end_page) || Math.min(30, pageCount)));
-      const pipeline = asText(options.pipeline) || "single-pass-v1";
-      if (!["single-pass-v1", CLASSIC_POETRY_PIPELINE, TRI_PASS_PIPELINE].includes(pipeline)) {
-        throw Object.assign(new Error(`不支持的生成流程：${pipeline}`), { status: 400 });
-      }
+      const pipeline = requireActiveEbookPipeline(options.pipeline);
       const model = asText(options.model) || (pipeline === CLASSIC_POETRY_PIPELINE ? CLASSIC_POETRY_MODEL : config.model);
       const manualPrompt = asText(options.manual_prompt);
       const workflowStepId = asText(options.workflow_step_id);

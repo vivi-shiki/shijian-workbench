@@ -1,3 +1,7 @@
+/**
+ * @deprecated Historical strict-audit experiment retained only for old run inspection and regression tests.
+ * Runtime generation rejects tri-pass-regions-v1; use single-pass-v1 followed by the SKILL review flow.
+ */
 import { projectFormatting, textSignature } from "./text-formatting.mjs";
 
 const INSERTION_CHARACTERS = new Set([..."，。！？；：、,.!?;:“”‘’「」『』《》（）()【】[]—…·\n"]);

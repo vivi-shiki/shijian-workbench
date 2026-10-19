@@ -49,9 +49,12 @@ function App() {
       .then((payload) => {
         const visibleProjects = (payload.projects || []).filter((project) => !project.archived);
         setProjects(visibleProjects);
-        setProjectId(visibleProjects.some((project) => project.id === payload.defaultProjectId)
-          ? payload.defaultProjectId
-          : visibleProjects[0]?.id || "");
+        const requestedProjectId = new URLSearchParams(window.location.search).get("project");
+        setProjectId(visibleProjects.some((project) => project.id === requestedProjectId)
+          ? requestedProjectId
+          : visibleProjects.some((project) => project.id === payload.defaultProjectId)
+            ? payload.defaultProjectId
+            : visibleProjects[0]?.id || "");
       })
       .catch((reason) => setError(reason.message));
   }, []);
@@ -68,7 +71,10 @@ function App() {
       .then((payload) => {
         const available = payload.datasets || [];
         setDatasets(available);
-        setScope(available[0] ? `dataset:${available[0].id}` : "live");
+        const requestedScope = new URLSearchParams(window.location.search).get("scope");
+        setScope(available.some((dataset) => `dataset:${dataset.id}` === requestedScope)
+          ? requestedScope
+          : "live");
         setScopeProjectId(projectId);
       })
       .catch((reason) => { if (reason.name !== "AbortError") setError(reason.message); });
@@ -170,6 +176,20 @@ function App() {
   const selectedProject = projects.find((item) => item.id === projectId);
   const livePageCount = selectedProject?.pages || data?.results?.[0]?.pages?.length || 0;
   const livePageRange = selectedProject?.page_range || (livePageCount ? { start: 1, end: livePageCount } : null);
+  function selectProject(nextProjectId) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("project", nextProjectId);
+    url.searchParams.delete("scope");
+    window.history.replaceState(null, "", url);
+    setProjectId(nextProjectId);
+  }
+  function selectScope(nextScope) {
+    const url = new URL(window.location.href);
+    if (nextScope === "live") url.searchParams.delete("scope");
+    else url.searchParams.set("scope", nextScope);
+    window.history.replaceState(null, "", url);
+    setScope(nextScope);
+  }
   return (
     <main className="reader-app">
       <header className="reader-header">
@@ -188,11 +208,11 @@ function App() {
         <div className="reader-selectors">
           <label className="reader-select-control">
             <span>项目</span>
-            <div><select value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></div>
+            <div><select value={projectId} onChange={(event) => selectProject(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></div>
           </label>
           <label className="reader-select-control reader-scope-select">
             <span>数据范围</span>
-            <div><select value={scope} disabled={!scope} onChange={(event) => setScope(event.target.value)}>{datasets.map((dataset) => <option key={dataset.id} value={`dataset:${dataset.id}`}>P{String(dataset.page_range.start).padStart(3, "0")}–{String(dataset.page_range.end).padStart(3, "0")} · 已冻结</option>)}<option value="live">{livePageRange ? `P${String(livePageRange.start).padStart(3, "0")}–${String(livePageRange.end).padStart(3, "0")}` : "当前范围"} · 当前工作区</option></select><ChevronDown size={15} aria-hidden="true" /></div>
+            <div><select value={scope} disabled={!scope} onChange={(event) => selectScope(event.target.value)}>{datasets.map((dataset) => <option key={dataset.id} value={`dataset:${dataset.id}`}>P{String(dataset.page_range.start).padStart(3, "0")}–{String(dataset.page_range.end).padStart(3, "0")} · 已冻结</option>)}<option value="live">{livePageRange ? `P${String(livePageRange.start).padStart(3, "0")}–${String(livePageRange.end).padStart(3, "0")}` : "当前范围"} · 当前工作区</option></select><ChevronDown size={15} aria-hidden="true" /></div>
           </label>
         </div>
       </header>

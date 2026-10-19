@@ -37,6 +37,9 @@ packages/oldbook-core/
 
 ## 反馈到候选
 
+当前唯一生产路线是 `single-pass-v1 -> SKILL 复核 -> approve`。
+`classic-poetry-v1` 和 `tri-pass-regions-v1` 已废弃，只保留历史代码和测试用于解释旧运行，不接受新任务。
+
 1. Codex 对照原页和双 OCR 分析反馈，先修改实际执行的提示词、任务逻辑、校验器或回归测试。
 2. 编写任务 JSON：明确 `scope`、`category`、连续且按正文顺序排列的 `entry_ids`、`result_ids` 和提炼后的 `rules`。
 3. `generate` 只调用一次外部模型，只保存候选；不覆盖正式电子书。
@@ -46,6 +49,8 @@ packages/oldbook-core/
 `examples/poetry-review.task.json` 是模板，运行前换成实际目标条目。
 `entry_ids` 是局部修订范围，不是强制保留的作品边界；`structure` 模式允许范围内拆分、合并。
 要找回整首漏诗，应把它前后的现有条目一起纳入目标范围，否则只读上下文不能补进正文。
+新页初稿尚未批准时，可在任务中设置 `base_candidate_run_id`，直接复核该候选中的 `entry_ids`；
+后续分段复核再引用上一段候选，最终只批准最后一个候选，避免把未复核初稿提前写入正式 JSON。
 
 任务模式：
 

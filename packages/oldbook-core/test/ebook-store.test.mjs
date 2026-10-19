@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyManualPageRevision, applyManualRangeRevision, buildClassicPoetryPrompt, buildClassicRetryPrompt, buildEbookPrompt, emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, trimClassicContextOutput, validateEbook, validationDiagnosticsToIssues, warningOnlyGenerationPolicy } from "../src/ebook-store.mjs";
+import { ACTIVE_EBOOK_PIPELINE, applyManualPageRevision, applyManualRangeRevision, buildClassicPoetryPrompt, buildClassicRetryPrompt, buildEbookPrompt, emptyEbook, mergeGenerated, migrateLegacyNotePositions, parseModelJson, requireActiveEbookPipeline, trimClassicContextOutput, validateEbook, validationDiagnosticsToIssues, warningOnlyGenerationPolicy } from "../src/ebook-store.mjs";
 import { validateGeneratedChunk, validateGeneratedDocument } from "../src/ebook-generation-validation.mjs";
 
 const project = { id: "book", title: "Book", results: [{ page_count: 30 }] };
+
+test("new generation accepts only single-pass followed by SKILL review", () => {
+  assert.equal(requireActiveEbookPipeline(), ACTIVE_EBOOK_PIPELINE);
+  assert.equal(requireActiveEbookPipeline("single-pass-v1"), "single-pass-v1");
+  assert.throws(() => requireActiveEbookPipeline("classic-poetry-v1"), /已废弃/);
+  assert.throws(() => requireActiveEbookPipeline("tri-pass-regions-v1"), /已废弃/);
+  assert.throws(() => requireActiveEbookPipeline("unknown"), /不支持/);
+});
 
 test("model JSON parser accepts fenced and surrounding content", () => {
   assert.deepEqual(parseModelJson("```json\n{\"entries\":[],\"issues\":[]}\n```"), { entries: [], issues: [] });

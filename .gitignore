@@ -60,3 +60,67 @@ Desktop.ini
 /tools/ndlkotenocr-lite/
 /remote/*.zip
 /packages/oldbook-server/remote/*.zip
+
+# ---- Never publish book or workspace data ----
+/data/
+/datasets/
+/workspace/
+/workspaces/
+/uploads/
+/output/
+/outputs/
+/remote/
+/tests/
+/.codex-tmp/
+/.playwright-cli/
+/tools/ndlkotenocr-lite
+/tools/pdf-render-deps/
+
+# Page images, scans, and source documents
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.bmp
+*.gif
+*.webp
+*.heic
+*.pdf
+*.djvu
+*.epub
+*.doc
+
+# OCR outputs and archives
+*.hocr
+*.ocr.json
+*.ocr.txt
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.rar
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+
+# Model weights and caches
+*.onnx
+*.pdparams
+*.pdmodel
+*.safetensors
+*.pt
+*.pth
+.cache/
+.paddle*/
+.huggingface/
+
+# Secrets
+*.pem
+*.key
+*.p12
+secrets/
+credentials*.json

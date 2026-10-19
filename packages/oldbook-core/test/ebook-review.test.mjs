@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { workspace, task, suite } from "./fixtures.mjs";
+import { entry, workspace, task, suite } from "./fixtures.mjs";
 import { EbookStore } from "../src/ebook-store.mjs";
 import { hashJson } from "../src/change-history.mjs";
+import { buildCandidateOutput } from "../src/ebook-candidates.mjs";
 
 test("generation records frozen evidence and candidate without touching production", async t => {
   const w = await workspace(t);
@@ -130,4 +131,52 @@ test("failed OCR sources are not sent to the model as blank evidence", async t =
   await fs.writeFile(filename, JSON.stringify(result));
   await assert.rejects(w.review.generate("book", task(), { config: w.config }), /Incomplete core OCR/);
   assert.equal(w.calls.length, 0);
+});
+
+test("SKILL review can refine an unapproved single-pass candidate without changing production", async t => {
+  const w = await workspace(t);
+  const initial = structuredClone(w.document);
+  initial.entries.push({ ...structuredClone(initial.entries[0]), id: "entry-0003", title: "初稿候選" });
+  initial.source.page_range = { start: 2, end: 2 };
+  initial.generation.pipeline = "single-pass-v1";
+  const generationRun = await w.history.startRun("book", {
+    actor: "ai:siliconflow", source: "deepseek-structure", provider: "siliconflow", model: "test-model",
+    input: { document: w.document }, options: { pipeline: "single-pass-v1", start_page: 2, end_page: 2 }
+  });
+  await w.history.finishRun("book", generationRun.id, { status: "awaiting_approval", output: buildCandidateOutput({
+    kind: "ebook-generation-candidate", baseline: w.document, candidate: initial,
+    page_range: { start: 2, end: 2 }, pipeline: "single-pass-v1"
+  }) });
+  const reviewTask = { ...task(), id: "review-generated-page", entry_ids: ["entry-0003"],
+    base_candidate_run_id: generationRun.id };
+  const reviewed = await w.review.generate("book", reviewTask, { config: w.config });
+  assert.equal(reviewed.base_candidate_run_id, generationRun.id);
+  assert.equal(reviewed.baseline_hash, hashJson(w.document));
+  assert.ok(reviewed.candidate.entries.some(entry => entry.id === "entry-0003"));
+  assert.equal(await fs.readFile(w.filename, "utf8"), JSON.stringify(w.document));
+
+  const store = new EbookStore(w.root, { index: async () => ({ id: "book" }) }, w.history);
+  const applied = await w.review.apply("book", reviewed.run_id,
+    { candidate_hash: reviewed.candidate_hash, note: "Approve reviewed candidate" }, store,
+    { actor: "ai:codex", channel: "agent", requested_by: "human" });
+  assert.ok(applied.document.entries.some(entry => entry.id === "entry-0003"));
+});
+
+test("review candidates mechanically demote impossible fixed-form claims without changing lines", async t => {
+  const modelEntry = { ...entry(), form: "五律",
+    notes: [{ text: "原注", position: { field: "lines", line: 1, offset: 99 } }] };
+  const { root, review } = await workspace(t, async () => ({
+    ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      entries: [modelEntry], issues: []
+    }) } }] })
+  }));
+  const output = await review.generate("book", task(), { config: { apiKey: "test-key" } });
+  const stored = JSON.parse(await fs.readFile(path.join(root, "book/history/runs", output.run_id, "output.json"), "utf8"));
+  assert.equal(stored.candidate.entries[0].form, "");
+  assert.deepEqual(stored.candidate.entries[0].lines, entry().lines);
+  assert.equal(stored.mechanical_repairs[0].entry_id, "entry-0001");
+  assert.equal(stored.candidate.entries[0].notes[0].position.offset, [...entry().lines[0]].length);
+  assert.equal(stored.mechanical_repairs[1].note_index, 0);
+  assert.match(stored.model_issues[0], /程序已保留正文并清空 form/);
+  assert.match(stored.model_issues[1], /程序已收缩到有效边界/);
 });
