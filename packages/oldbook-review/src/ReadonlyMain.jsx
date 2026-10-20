@@ -134,14 +134,23 @@ function App() {
     return merged;
   }, [projectId]);
 
-  const reviseLivePage = React.useCallback(async ({ pageStart, pageEnd, manualPrompt }) => {
+  const reviseLivePage = React.useCallback(async ({ pageStart, pageEnd, manualPrompt, revisionMode, applyMode }) => {
     const response = await fetch(`/api/projects/${projectId}/ebook/revise-page`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ start_page: pageStart, end_page: pageEnd, manual_prompt: manualPrompt })
+      body: JSON.stringify({ start_page: pageStart, end_page: pageEnd, manual_prompt: manualPrompt,
+        revision_mode: revisionMode, apply_mode: applyMode })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || payload.message || "本页模型修订失败");
+    if (payload.approved && payload.document) {
+      const current = liveCacheRef.current.get(projectId);
+      if (current) {
+        const updated = { ...current, ebook: payload.document };
+        liveCacheRef.current.set(projectId, updated);
+        if (selectionRef.current === `${projectId}:live`) setData(updated);
+      }
+    }
     return payload;
   }, [projectId]);
 

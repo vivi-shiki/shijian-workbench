@@ -5,6 +5,8 @@ import { parseArgs } from "node:util";
 import { HistoryStore } from "../../oldbook-core/src/change-history.mjs";
 import { EbookReview } from "../../oldbook-core/src/ebook-review.mjs";
 import { safeId } from "../../oldbook-core/src/project-store.mjs";
+import { ProjectStore } from "../../oldbook-core/src/project-store.mjs";
+import { EbookStore } from "../../oldbook-core/src/ebook-store.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const help = `Usage: node packages/oldbook-cli/src/ebook.mjs <generate|evaluate|list|show|approve|apply|abandon> --project <id> [options]
@@ -62,10 +64,21 @@ async function main() {
       try { process.loadEnvFile(path.join(root, name)); }
       catch (error) { if (error.code !== "ENOENT") throw error; }
     }
-    const output = await review.generate(projectId, await read(values.task), {
+    const task = await read(values.task);
+    const output = await review.generate(projectId, task, {
       suite, previousRunId: values.previous, config: { model: values.model }
     });
+    if (task.apply_mode === "direct_overwrite") {
+      const history = new HistoryStore(projects);
+      const ebookStore = new EbookStore(projects, new ProjectStore(projects, history), history);
+      await review.apply(projectId, output.run_id, {
+        candidate_hash: output.candidate_hash,
+        note: "用户要求单次修订后直接覆盖并自动批准",
+        channel: "agent", requested_by: "human"
+      }, ebookStore, { actor: "ai:codex", channel: "agent", requested_by: "human" });
+    }
     console.log(JSON.stringify({ run_id: output.run_id, round: output.round, candidate_hash: output.candidate_hash,
+      approved: task.apply_mode === "direct_overwrite",
       evaluation: output.evaluation, model_issues: output.model_issues,
       artifacts: path.join(projects, projectId, "history/runs", output.run_id) }, null, 2));
     if (!output.evaluation.mechanical_pass) process.exitCode = 1;

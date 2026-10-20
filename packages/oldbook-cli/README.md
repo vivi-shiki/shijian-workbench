@@ -37,6 +37,34 @@ packages/oldbook-core/
 
 ## 反馈到候选
 
+### TXT 参考文档与单次修订
+
+`reference.mjs` 将本地 TXT 按题名、组诗和逐首正文拆成 `references/yiyuji-txt.json`，并为第 43 页后的诗歌生成 `match-plan-from-43.json`。每条匹配保存来源行号、参考作品 ID 和相似分数；低分匹配仅是线索。两份 JSON 都位于被 Git 忽略的项目数据目录。命令示例：
+
+```powershell
+node packages/oldbook-cli/src/reference.mjs --project yiyuji-four-volumes --input "C:\path\to\疑雨集.txt"
+```
+
+弹窗提供“单次修订”和“直接覆盖”。前者明确记录本轮只调用一次模型；后者在候选生成后按候选哈希自动批准并写入正式电子书。参考文档会以单独的“参考文档”段落进入提示词，原页、人工校订和 OCR 仍用于判断异文。CLI 任务也可指定 `revision_mode: "single_revision"`、`apply_mode: "direct_overwrite"` 和 `reference_verses`；直接覆盖沿用候选批准记录和基线哈希检查。
+
+本项目卷二第 131–198 页原先缺少结构化作品。`fill-reference-gap.mjs` 用 TXT 作品顺序与双 OCR 诗句重合度生成页码对齐报告；先不带参数预览，核对后加 `--apply` 作为候选批准补录。随后重新运行 `reference.mjs` 更新匹配计划，再用以下命令按作品批量修订。进度及每首对应的模型运行、批准运行都保存在 Git 忽略的 `references/revision-progress-from-43.json` 中，可中断续跑。
+
+```powershell
+node packages/oldbook-cli/src/fill-reference-gap.mjs
+node packages/oldbook-cli/src/fill-reference-gap.mjs --apply
+node packages/oldbook-cli/src/batch-revise.mjs --project yiyuji-four-volumes --from-page 43 --parallel 3
+node packages/oldbook-cli/src/normalize-reference-script.mjs
+node packages/oldbook-cli/src/normalize-reference-script.mjs --apply
+node packages/oldbook-cli/src/verify-reference-revisions.mjs --project yiyuji-four-volumes --from-page 43
+```
+
+`batch-revise.mjs` 按匹配计划逐首处理，每首建立一条模型运行和自动批准记录，进度写入忽略的 `revision-progress-from-43.json`，可断点继续。它会向配置的模型服务发送目标条目、相邻页双 OCR 和匹配的参考诗句，运行前需确认这些资料可发送到该服务。
+
+```powershell
+node packages/oldbook-cli/src/batch-revise.mjs --project yiyuji-four-volumes --limit 1
+node packages/oldbook-cli/src/batch-revise.mjs --project yiyuji-four-volumes
+```
+
 当前唯一生产路线是 `single-pass-v1 -> SKILL 复核 -> approve`。
 `classic-poetry-v1` 和 `tri-pass-regions-v1` 已废弃，只保留历史代码和测试用于解释旧运行，不接受新任务。
 

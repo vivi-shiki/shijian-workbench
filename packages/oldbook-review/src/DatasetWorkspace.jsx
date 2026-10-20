@@ -165,6 +165,8 @@ function PageRevisionDialog({ projectId, pageNumber, pages, entries, results, li
   const [pageStart, setPageStart] = React.useState(pageNumber);
   const [pageEnd, setPageEnd] = React.useState(pageNumber);
   const [manualPrompt, setManualPrompt] = React.useState("");
+  const [singleRevision, setSingleRevision] = React.useState(false);
+  const [directOverwrite, setDirectOverwrite] = React.useState(false);
   const [promptHistory, setPromptHistory] = React.useState(() => recentPrompts(projectId));
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [running, setRunning] = React.useState(false);
@@ -237,8 +239,11 @@ function PageRevisionDialog({ projectId, pageNumber, pages, entries, results, li
     setPromptHistory(rememberPrompt(projectId, manualPrompt));
     try {
       await onEnsureRange?.(pageStart, pageEnd);
-      const payload = await onConfirm({ manualPrompt: manualPrompt.trim(), pageStart, pageEnd });
-      setCandidate(payload.revision || null);
+      const payload = await onConfirm({ manualPrompt: manualPrompt.trim(), pageStart, pageEnd,
+        revisionMode: singleRevision ? "single_revision" : null,
+        applyMode: directOverwrite ? "direct_overwrite" : null });
+      if (payload.approved) onClose();
+      else setCandidate(payload.revision || null);
     } catch (reason) {
       setError(reason.message || "本页修订失败");
     } finally {
@@ -275,6 +280,10 @@ function PageRevisionDialog({ projectId, pageNumber, pages, entries, results, li
           <label><span>结束页</span><input type="number" min={pageStart} max={Math.min(lastAvailablePage, pageStart + 4)} value={pageEnd} disabled={running || Boolean(candidate)} onChange={(event) => changeEnd(event.target.value)} /></label>
         </div> : null}
         <p><strong>{rangeLabel}</strong><span>{pageEnd - pageStart + 1} 页 · {selectedEntries.length} 个相关条目</span>{rangeMode === "range" ? <small>单次最多 5 页，前后各一页作为只读边界证据</small> : null}</p>
+      </section>
+      <section className="revision-range-control" aria-label="修订模式">
+        <label><input type="checkbox" checked={singleRevision} disabled={running || Boolean(candidate)} onChange={(event) => setSingleRevision(event.target.checked)} />单次修订（只调用一次模型）</label>
+        <label><input type="checkbox" checked={directOverwrite} disabled={running || Boolean(candidate)} onChange={(event) => setDirectOverwrite(event.target.checked)} />直接覆盖（候选生成后自动批准并写入）</label>
       </section>
       <div className="revision-source-grid">
         <label className="revision-field revision-json-field"><span>目标范围结构 JSON</span><textarea readOnly value={pageJson} spellCheck="false" /></label>

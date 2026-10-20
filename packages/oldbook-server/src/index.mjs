@@ -302,7 +302,20 @@ app.post("/api/projects/:projectId/ebook/run", async (req, res) => {
 });
 
 app.post("/api/projects/:projectId/ebook/revise-page", async (req, res) => {
-  res.json(await ebookStore.revisePage(safeProjectId(req.params.projectId), req.body));
+  const projectId = safeProjectId(req.params.projectId);
+  const result = await ebookStore.revisePage(projectId, req.body);
+  if (req.body?.apply_mode === "direct_overwrite") {
+    const revision = result.revision;
+    const saved = await ebookCandidates.approve(projectId, revision.run_id, {
+      candidate_hash: revision.candidate_hash,
+      note: "用户在修订弹窗选择直接覆盖并自动批准",
+      channel: "web", requested_by: "human"
+    }, ebookStore, auditFromRequest(req, { actor: "human", source: "web-page-revision",
+      channel: "web", requested_by: "human" }));
+    res.json({ ...result, approved: true, document: saved.document });
+    return;
+  }
+  res.json(result);
 });
 
 app.post("/api/projects/:projectId/ebook/revise-page/:runId/apply", async (req, res) => {
