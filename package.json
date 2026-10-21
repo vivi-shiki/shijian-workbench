@@ -10,6 +10,7 @@
     "web": "vite --config packages/oldbook-review/vite.config.js --host 127.0.0.1",
     "build": "vite build --config packages/oldbook-review/vite.config.js",
     "test": "node --test packages/oldbook-core/test/*.test.mjs packages/oldbook-review/test/*.test.mjs",
+    "test:desktop": "node --test packages/oldbook-desktop/test/*.test.mjs",
     "test:ocr": "python -m unittest discover -s packages/oldbook-cli/test/ocr -v",
     "ebook:generate": "node packages/oldbook-cli/src/ebook.mjs generate",
     "ebook:evaluate": "node packages/oldbook-cli/src/ebook.mjs evaluate",
