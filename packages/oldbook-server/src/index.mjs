@@ -11,6 +11,8 @@ import { ProjectStore } from "../../oldbook-core/src/project-store.mjs";
 import { DatasetStore } from "../../oldbook-core/src/dataset-store.mjs";
 import { planEntryRevision, assertSingleEntryCandidate } from "../../oldbook-core/src/desktop-work-units.mjs";
 import { JobQueue, summarizeProject, estimateModelCost } from "../../oldbook-core/src/desktop-jobs.mjs";
+import { createProjectBackup, verifyProjectBackup, restoreProjectBackup,
+  pruneBackups } from "../../oldbook-core/src/desktop-portability.mjs";
 import { previewSources, createImportedProject, createSampleProject, checkModelConnection,
   createSourceAdapters } from "../../oldbook-core/src/desktop-onboarding.mjs";
 
@@ -257,6 +259,34 @@ app.post("/api/onboarding/sample", async (_req, res) => {
 
 app.post("/api/onboarding/model-check", async (req, res) => {
   res.json(await checkModelConnection({ baseUrl: req.body?.baseUrl, apiKey: req.body?.apiKey }));
+});
+
+app.post("/api/backups/verify", async (req, res) => {
+  if (typeof req.body?.backup_file !== "string" || !req.body.backup_file) {
+    throw Object.assign(new Error("请选择备份包"), { status: 400 });
+  }
+  res.json(await verifyProjectBackup({ backupFile: req.body.backup_file }));
+});
+
+app.post("/api/backups/restore", async (req, res) => {
+  if (typeof req.body?.backup_file !== "string" || !req.body.backup_file) {
+    throw Object.assign(new Error("请选择备份包"), { status: 400 });
+  }
+  const result = await restoreProjectBackup({ backupFile: req.body.backup_file, projectsRoot });
+  res.status(201).json(result);
+});
+
+app.post("/api/projects/:projectId/backup", async (req, res) => {
+  const projectId = safeProjectId(req.params.projectId);
+  await store.index(projectId);
+  const backupDir = path.join(projectsRoot, ".backups");
+  const automatic = !req.body?.output_file;
+  const outputFile = automatic
+    ? path.join(backupDir, `${projectId}-${new Date().toISOString().replace(/[:.]/g, "-")}.shijian`)
+    : path.resolve(req.body.output_file);
+  const created = await createProjectBackup({ projectDirectory: path.join(projectsRoot, projectId), outputFile });
+  if (automatic) await pruneBackups({ directory: backupDir, keep: 5 });
+  res.status(201).json(created);
 });
 
 app.get("/api/projects/:projectId/reader", async (req, res) => {

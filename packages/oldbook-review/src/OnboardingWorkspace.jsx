@@ -56,6 +56,15 @@ export default function OnboardingWorkspace({ onCreated, onClose }) {
     const created = await postJson("/api/onboarding/sample");
     onCreated(created.id);
   });
+  const restore = () => execute(async () => {
+    if (!window.oldbookDesktop?.chooseBackupFile) throw new Error("请在桌面版中选择备份包。 ");
+    const backupFile = await window.oldbookDesktop.chooseBackupFile();
+    if (!backupFile) return;
+    const verified = await postJson("/api/backups/verify", { backup_file: backupFile });
+    if (!verified.ok) throw new Error(`备份包校验失败：${verified.error}`);
+    const restored = await postJson("/api/backups/restore", { backup_file: backupFile });
+    onCreated(restored.project_id);
+  });
   const checkModel = () => execute(async () => {
     const result = window.oldbookDesktop?.saveModelSettings
       ? await window.oldbookDesktop.saveModelSettings({ baseUrl, apiKey })
@@ -82,6 +91,8 @@ export default function OnboardingWorkspace({ onCreated, onClose }) {
     </section>
     <section className="onboarding-card"><h2>先试试看</h2><p>使用一页示例书页，无须配置模型。</p>
       <button type="button" onClick={sample} disabled={busy}>打开示例项目</button></section>
+    <section className="onboarding-card"><h2>恢复已有项目</h2><p>选择 .shijian 备份包，先校验后恢复书影、修订历史与冻结数据。</p>
+      <button type="button" onClick={restore} disabled={busy}>选择备份包并恢复</button></section>
     <section className="onboarding-card"><h2>模型设置</h2><p>只在需要 AI 识别或修订时配置。</p>
       <label>服务地址<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} disabled={busy} /></label>
       <label>API 密钥<input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} disabled={busy} autoComplete="off" /></label>
