@@ -141,6 +141,9 @@ button:disabled { cursor: default; opacity: .65; }
 .rail-scroll { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .dataset-page-rail button, .dataset-structure-rail button { width: 100%; border: 0; border-bottom: 1px solid #e2dcd1; color: #514b42; background: transparent; text-align: left; }
 .dataset-page-rail button { display: grid; grid-template-columns: 42px 1fr; align-items: center; gap: 7px; height: 64px; padding: 6px 7px; }
+.rail-page-item { border-bottom: 1px solid #e2dcd1; }
+.rail-page-item > a { display: block; padding: 1px 7px 6px; color: var(--accent); font-size: 10px; text-decoration: none; }
+.rail-page-item > a:hover { text-decoration: underline; }
 .dataset-page-rail .rail-page-thumb { display: block; width: 40px; height: 52px; border: 1px solid #ccc2b4; background: #e9e4db; }
 .dataset-page-rail .rail-page-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; background: #fff; }
 .dataset-page-rail button span { font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -190,6 +193,14 @@ button:disabled { cursor: default; opacity: .65; }
 .entry-page-action { display: inline-flex; align-items: center; gap: 3px; }
 .entry-page-action > button { display: inline-grid; flex: 0 0 22px; place-items: center; width: 22px; min-width: 22px; max-width: 22px; height: 22px; min-height: 22px; max-height: 22px; padding: 0; color: #756b5e; background: #f4efe6; border: 1px solid #d8cfc2; border-radius: 4px; }
 .entry-page-action > button:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
+.entry-revise-action { display: inline-flex; align-items: center; gap: 3px; padding: 2px 5px; color: var(--accent); background: #edf5f3; border: 1px solid #a9c8c3; border-radius: 3px; font-size: 10px; cursor: pointer; }
+.entry-revise-action:hover { background: #d9eeeb; }
+.entry-revision-pages { display: flex; gap: 10px; overflow-x: auto; padding: 6px 0; }
+.entry-revision-pages figure { flex: 0 0 148px; margin: 0; }
+.entry-revision-pages img { display: block; width: 148px; height: 190px; object-fit: contain; background: #eee7db; border: 1px solid #d5ccbf; }
+.entry-revision-pages figcaption { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.entry-revision-dialog details { display: grid; gap: 7px; font-size: 12px; }
+.entry-revision-dialog details label { display: block; margin-top: 6px; }
 .edition-entry h2 { margin: 8px 0 12px; color: #29251f; font-size: 24px; line-height: 1.5; text-align: center; letter-spacing: 0; }
 .edition-entry h3 { margin: 10px 0 14px; color: #29251f; font-size: 18px; line-height: 1.55; text-align: center; letter-spacing: 0; }
 .entry-series { display: flex; align-items: baseline; justify-content: center; gap: 9px; margin: 0 0 8px; color: #706659; font-size: 13px; }

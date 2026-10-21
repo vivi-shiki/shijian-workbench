@@ -158,6 +158,26 @@ function App() {
     return payload;
   }, [projectId]);
 
+  const reviseLiveEntry = React.useCallback(async ({ entryId, manualPrompt, revisionMode, applyMode }) => {
+    const response = await fetch(`/api/projects/${projectId}/ebook/revise-entry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entry_id: entryId, manual_prompt: manualPrompt,
+        revision_mode: revisionMode, apply_mode: applyMode })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || payload.message || "作品修订失败");
+    if (payload.approved && payload.document) {
+      const current = liveCacheRef.current.get(projectId);
+      if (current) {
+        const updated = { ...current, ebook: payload.document };
+        liveCacheRef.current.set(projectId, updated);
+        if (selectionRef.current === `${projectId}:live`) setData(updated);
+      }
+    }
+    return payload;
+  }, [projectId]);
+
   const applyPageRevision = React.useCallback(async ({ runId, candidateHash }) => {
     const response = await fetch(`/api/projects/${projectId}/ebook/candidates/${encodeURIComponent(runId)}/approve`, {
       method: "POST",
@@ -235,7 +255,7 @@ function App() {
         </div>
       </header>
       {error ? <div className="reader-error" role="alert">{error}</div> : null}
-      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} onEnsureRange={data.manifest ? null : loadLiveRange} onRevisePage={data.manifest ? null : reviseLivePage} onApplyPageRevision={data.manifest ? null : applyPageRevision} /> : <div className="reader-loading">正在读取对照资料…</div>}
+      {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} onEnsureRange={data.manifest ? null : loadLiveRange} onRevisePage={data.manifest ? null : reviseLivePage} onReviseEntry={data.manifest ? null : reviseLiveEntry} onApplyPageRevision={data.manifest ? null : applyPageRevision} /> : <div className="reader-loading">正在读取对照资料…</div>}
     </main>
   );
 }

@@ -7,7 +7,11 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "../../dist",
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: { input: {
+      reader: fileURLToPath(new URL("./index.html", import.meta.url)),
+      editor: fileURLToPath(new URL("./editor.html", import.meta.url))
+    } }
   },
   server: {
     port: 5173,

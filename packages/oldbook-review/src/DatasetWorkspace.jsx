@@ -41,14 +41,14 @@ function findCurrent(container, selector, offset = 80) {
   return current;
 }
 
-function PageRail({ pages, activePage, onSelect }) {
+function PageRail({ pages, activePage, onSelect, projectId, editable }) {
   const activeRef = React.useRef(null);
   React.useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest" }); }, [activePage]);
   return <nav className="dataset-page-rail" aria-label="页面目录">
     <div className="rail-heading"><ImageIcon size={15} /><span>页面</span></div>
     <div className="rail-scroll">{pages.map((page) => {
       const nearby = Math.abs(page.page_number - activePage) <= 2;
-      return <button key={page.id} ref={page.page_number === activePage ? activeRef : null} className={page.page_number === activePage ? "is-active" : ""} aria-current={page.page_number === activePage ? "page" : undefined} onClick={() => onSelect(page.page_number)}><span className="rail-page-thumb">{nearby ? <img src={page.image_url || `/${page.image_path}`} alt="" loading={page.page_number === activePage ? "eager" : "lazy"} /> : null}</span><span>{pageLabel(page.page_number)}</span></button>;
+      return <div className="rail-page-item" key={page.id}><button ref={page.page_number === activePage ? activeRef : null} className={page.page_number === activePage ? "is-active" : ""} aria-current={page.page_number === activePage ? "page" : undefined} onClick={() => onSelect(page.page_number)}><span className="rail-page-thumb">{nearby ? <img src={page.image_url || `/${page.image_path}`} alt="" loading={page.page_number === activePage ? "eager" : "lazy"} /> : null}</span><span>{pageLabel(page.page_number)}</span></button>{editable ? <a href={`/editor.html?project=${encodeURIComponent(projectId)}&page=${page.page_number}`} title={`校对 ${pageLabel(page.page_number)} 的 OCR`}>校对 OCR</a> : null}</div>;
     })}</div>
   </nav>;
 }
@@ -319,12 +319,74 @@ function PageRevisionDialog({ projectId, pageNumber, pages, entries, results, li
   </div>;
 }
 
+function EntryRevisionDialog({ entry, pages, results, modelConfig, onClose, onConfirm, onApply }) {
+  const [prompt, setPrompt] = React.useState("");
+  const [advanced, setAdvanced] = React.useState(false);
+  const [singleRevision, setSingleRevision] = React.useState(false);
+  const [directOverwrite, setDirectOverwrite] = React.useState(false);
+  const [candidate, setCandidate] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  if (!entry) return null;
+  const sourcePages = [...new Set(entry.source_pages || [])].sort((a, b) => a - b);
+  const evidence = results.map(result => ({ label: SOURCE_LABELS[result.id] || result.label || result.id,
+    text: (result.pages || []).filter(page => sourcePages.includes(page.page_number))
+      .map(page => `${pageLabel(page.page_number)}\n${(page.regions || []).map(textForRegion).join("\n")}`).join("\n\n") }));
+  async function submit() {
+    if (!prompt.trim() || busy) return;
+    setBusy(true); setError("");
+    try {
+      const payload = await onConfirm({ entryId: entry.id, manualPrompt: prompt.trim(),
+        revisionMode: singleRevision ? "single_revision" : null,
+        applyMode: directOverwrite ? "direct_overwrite" : null });
+      if (payload.approved) onClose();
+      else setCandidate(payload.revision);
+    } catch (reason) { setError(reason.message || "作品修订失败"); }
+    finally { setBusy(false); }
+  }
+  async function approve() {
+    if (!candidate?.run_id || busy) return;
+    setBusy(true); setError("");
+    try {
+      await onApply({ runId: candidate.run_id, candidateHash: candidate.candidate_hash });
+      onClose();
+    } catch (reason) { setError(reason.message || "批准失败"); }
+    finally { setBusy(false); }
+  }
+  const revised = candidate?.candidate?.entries?.find(item => item.id === entry.id);
+  return <div className="page-revision-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <section className="page-revision-dialog entry-revision-dialog" role="dialog" aria-modal="true" aria-labelledby="entry-revision-title">
+      <header><div><h2 id="entry-revision-title">修订《{entryLabel(entry)}》</h2><p>只修改这一首作品；{sourcePages.map(pageLabel).join("、")} 的原页与 OCR 作为证据。</p></div>
+        <button className="icon-button" type="button" onClick={onClose} disabled={busy} title="关闭"><X size={17} /></button></header>
+      <div className="revision-source-grid">
+        <label className="revision-field revision-json-field"><span>当前作品</span><textarea readOnly value={JSON.stringify(entry, null, 2)} /></label>
+        {evidence.map(item => <label className="revision-field revision-json-field" key={item.label}><span>{item.label}</span><textarea readOnly value={item.text || "证据将在提交时加载"} /></label>)}
+      </div>
+      <div className="entry-revision-pages" aria-label="作品原页">{sourcePages.map(pageNumber => {
+        const page = pages.find(item => item.page_number === pageNumber);
+        return <figure key={pageNumber}><img src={page?.image_url || (page?.image_path ? `/${page.image_path}` : "")} alt={`${pageLabel(pageNumber)} 原页`} /><figcaption>{pageLabel(pageNumber)} 原页</figcaption></figure>;
+      })}</div>
+      <label className="revision-field"><span>需要修订的内容</span><textarea value={prompt} onChange={event => setPrompt(event.target.value)} disabled={busy || Boolean(candidate)} placeholder="例如：核对第二句的字形与注文位置" /></label>
+      <details open={advanced} onToggle={event => setAdvanced(event.currentTarget.open)}><summary>高级选项</summary>
+        <label><input type="checkbox" checked={singleRevision} onChange={event => setSingleRevision(event.target.checked)} disabled={busy || Boolean(candidate)} />单次修订（仅调用一次模型）</label>
+        <label><input type="checkbox" checked={directOverwrite} onChange={event => setDirectOverwrite(event.target.checked)} disabled={busy || Boolean(candidate)} />直接覆盖（生成后自动批准）</label>
+      </details>
+      {revised ? <label className="revision-field revision-candidate-field"><span>候选作品：批准后写入正式正文</span><textarea readOnly value={JSON.stringify(revised, null, 2)} /></label> : null}
+      {error ? <p className="page-revision-error" role="alert">{error}</p> : null}
+      {!modelConfig?.configured ? <p className="page-revision-error">请先在新建项目页面配置模型。</p> : null}
+      <footer><button type="button" className="button" onClick={onClose} disabled={busy}>关闭</button>
+        {candidate ? <button type="button" className="button primary" onClick={approve} disabled={busy}>批准并应用</button>
+          : <button type="button" className="button primary" onClick={submit} disabled={busy || !prompt.trim() || !modelConfig?.configured}>{busy ? "正在修订" : "生成候选"}</button>}</footer>
+    </section>
+  </div>;
+}
+
 function EditionEntry({ entry, relatedTargets, onTargetEnter, onTargetLeave, onRevisionRequest, idPrefix = "" }) {
   const target = (field, index = null) => `${entry.id}:${index == null ? field : `${field}-${index}`}`;
   const prose = splitProse(entry.prose);
   const heading = entry.kind === "heading";
   return <article className={`edition-entry kind-${entry.kind}`} id={`${idPrefix}edition-entry-${entry.id}`} data-entry-section={entry.id}>
-    <div className="entry-source-pages">{(entry.source_pages || []).map((pageNumber) => <span className="entry-page-action" key={pageNumber}><span>{pageLabel(pageNumber)}</span>{entry.kind === "poem" && onRevisionRequest ? <button type="button" onClick={() => onRevisionRequest(pageNumber)} title={`使用当前项目模型修订 ${pageLabel(pageNumber)}`}><WandSparkles size={12} /></button> : null}</span>)}</div>
+    <div className="entry-source-pages">{(entry.source_pages || []).map((pageNumber) => <span className="entry-page-action" key={pageNumber}><span>{pageLabel(pageNumber)}</span></span>)}{entry.kind === "poem" && onRevisionRequest ? <button type="button" className="entry-revise-action" onClick={() => onRevisionRequest(entry.id)} title={`只修订《${entryLabel(entry)}》`}><WandSparkles size={12} />修订此作品</button> : null}</div>
     {entry.series?.title ? <div className="entry-series"><Target id={target("series")} idPrefix={idPrefix} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}><AnnotatedText text={displayedSeriesTitle(entry.series.title)} notes={entry.notes} field="series" /></Target><span>{seriesOrdinal(entry.series.index)}</span></div> : null}
     {entry.title ? (heading ? <h2><Target id={target("title")} idPrefix={idPrefix} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}><AnnotatedText text={entry.title} notes={entry.notes} field="title" /></Target></h2> : <h3><Target id={target("title")} idPrefix={idPrefix} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}><AnnotatedText text={entry.title} notes={entry.notes} field="title" /></Target></h3>) : null}
     {entry.subtitle ? <p className="entry-subtitle"><Target id={target("subtitle")} idPrefix={idPrefix} relatedTargets={relatedTargets} onEnter={onTargetEnter} onLeave={onTargetLeave}>{entry.subtitle}</Target></p> : null}
@@ -355,7 +417,7 @@ function ComparisonPanes({ pages, results, links = EMPTY_LINKS, activePage, rela
   </>;
 }
 
-export default function DatasetWorkspace({ data, onPageRequest = null, onRevisePage = null, onApplyPageRevision = null, onEnsureRange = null }) {
+export default function DatasetWorkspace({ data, onPageRequest = null, onRevisePage = null, onReviseEntry = null, onApplyPageRevision = null, onEnsureRange = null }) {
   const allPages = React.useMemo(() => [...(data.project?.source?.pages || data.results?.[0]?.pages || [])].sort((a, b) => a.page_number - b.page_number), [data]);
   const loadedPageNumbers = React.useMemo(() => new Set((data.results?.[0]?.pages || []).map((page) => page.page_number)), [data.results]);
   const pages = React.useMemo(() => allPages.filter((page) => loadedPageNumbers.has(page.page_number)), [allPages, loadedPageNumbers]);
@@ -365,6 +427,7 @@ export default function DatasetWorkspace({ data, onPageRequest = null, onReviseP
   const [hoveredRegion, setHoveredRegion] = React.useState("");
   const [hoveredTarget, setHoveredTarget] = React.useState("");
   const [revisionPage, setRevisionPage] = React.useState(null);
+  const [revisionEntryId, setRevisionEntryId] = React.useState(null);
   const hasEdition = entries.length > 0;
   const relatedTargets = React.useMemo(() => new Set(hoveredRegion ? data.links.by_region?.[hoveredRegion] || [] : []), [data.links, hoveredRegion]);
   const relatedRegions = React.useMemo(() => new Set(hoveredTarget ? (data.links.by_target?.[hoveredTarget] || []).map((source) => source.region_key) : hoveredRegion ? [hoveredRegion] : []), [data.links, hoveredRegion, hoveredTarget]);
@@ -412,11 +475,19 @@ export default function DatasetWorkspace({ data, onPageRequest = null, onReviseP
     if (!loadedPageNumbers.has(pageNumber) && onPageRequest) await onPageRequest(pageNumber);
     setRevisionPage(pageNumber);
   }, [loadedPageNumbers, onPageRequest]);
+  const openEntryRevision = React.useCallback(async (entryId) => {
+    const entry = entries.find(item => item.id === entryId);
+    if (!entry) return;
+    const sourcePages = [...new Set(entry.source_pages || [])].sort((a, b) => a - b);
+    if (sourcePages.length && onEnsureRange) await onEnsureRange(sourcePages[0], sourcePages.at(-1));
+    setRevisionEntryId(entryId);
+  }, [entries, onEnsureRange]);
 
   return <div className={`dataset-workspace ${hasEdition ? "has-edition" : "without-edition"}`}>
-    <PageRail pages={allPages} activePage={activePage} onSelect={scrollPage} />
-    <ComparisonPanes pages={pages} results={data.results || []} links={data.links} activePage={activePage} relatedRegions={relatedRegions} onPageVisible={pageVisible} onRegionEnter={regionEnter} onRegionLeave={regionLeave} onRegionClick={jumpFromRegion} entries={entries} activeEntry={activeEntry} relatedTargets={relatedTargets} onEntryVisible={entryVisible} onTargetEnter={targetEnter} onTargetLeave={targetLeave} onRevisionRequest={onRevisePage ? openRevision : null} />
+    <PageRail pages={allPages} activePage={activePage} onSelect={scrollPage} projectId={data.project?.id} editable={Boolean(onPageRequest)} />
+    <ComparisonPanes pages={pages} results={data.results || []} links={data.links} activePage={activePage} relatedRegions={relatedRegions} onPageVisible={pageVisible} onRegionEnter={regionEnter} onRegionLeave={regionLeave} onRegionClick={jumpFromRegion} entries={entries} activeEntry={activeEntry} relatedTargets={relatedTargets} onEntryVisible={entryVisible} onTargetEnter={targetEnter} onTargetLeave={targetLeave} onRevisionRequest={onReviseEntry ? openEntryRevision : null} />
     {hasEdition ? <StructureRail entries={entries} activeEntry={activeEntry} onSelect={scrollEntry} /> : null}
     {revisionPage != null && onRevisePage && onApplyPageRevision ? <PageRevisionDialog projectId={data.project?.id} pageNumber={revisionPage} pages={allPages} entries={entries} results={data.results || []} links={data.links || EMPTY_LINKS} modelConfig={data.model_config} onClose={() => setRevisionPage(null)} onConfirm={onRevisePage} onApply={onApplyPageRevision} onEnsureRange={onEnsureRange} /> : null}
+    {revisionEntryId && onReviseEntry && onApplyPageRevision ? <EntryRevisionDialog key={revisionEntryId} entry={entries.find(item => item.id === revisionEntryId)} pages={allPages} results={data.results || []} modelConfig={data.model_config} onClose={() => setRevisionEntryId(null)} onConfirm={onReviseEntry} onApply={onApplyPageRevision} /> : null}
   </div>;
 }

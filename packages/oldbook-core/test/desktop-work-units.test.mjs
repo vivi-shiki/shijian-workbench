@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assembleCandidate } from "../src/ebook-review.mjs";
-import { planEntryRevision, planPageCorrection, DEFAULT_REVISION_OPTIONS } from "../src/desktop-work-units.mjs";
+import { planEntryRevision, planPageCorrection, assertSingleEntryCandidate,
+  DEFAULT_REVISION_OPTIONS } from "../src/desktop-work-units.mjs";
 
 const document = {
   entries: [
@@ -50,6 +51,10 @@ test("a poem candidate leaves the other poem on the same page untouched", () => 
   const candidate = assembleCandidate(document, task, { entries: [replacement], issues: [] });
   assert.deepEqual(candidate.entries[2], document.entries[2]);
   assert.deepEqual(candidate.entries[1].lines, replacement.lines);
+  assert.equal(assertSingleEntryCandidate(document, candidate, "poem-target"), candidate);
+  const expanded = structuredClone(candidate);
+  expanded.entries.splice(2, 0, { id: "new-poem", kind: "poem", source_pages: [12] });
+  assert.throws(() => assertSingleEntryCandidate(document, expanded, "poem-target"), /outside/);
   assert.throws(() => assembleCandidate(document, task, {
     entries: [replacement, { ...document.entries[2], lines: ["越界修改"] }], issues: []
   }), /out-of-scope/);

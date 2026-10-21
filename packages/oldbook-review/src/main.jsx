@@ -213,8 +213,10 @@ function App() {
     if (!response.ok) throw new Error(`${projectId} project.json not found`);
     const data = await response.json();
     setProject(data);
-    setSelectedPageId(data.pages[0]?.id || null);
-    setSelectedRegionId(data.pages[0]?.regions[0]?.id || null);
+    const requestedPage = Number(new URLSearchParams(window.location.search).get("page"));
+    const initialPage = data.pages.find(page => page.page_number === requestedPage) || data.pages[0];
+    setSelectedPageId(initialPage?.id || null);
+    setSelectedRegionId(initialPage?.regions[0]?.id || null);
     setDirty(false);
     dirtyPages.current.clear();
     window.localStorage.setItem("oldbook-project-id", data.id);

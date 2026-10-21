@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { HistoryStore } from "../../oldbook-core/src/change-history.mjs";
 import { EbookStore } from "../../oldbook-core/src/ebook-store.mjs";
 import { EbookCandidates } from "../../oldbook-core/src/ebook-candidates.mjs";
+import { EbookReview } from "../../oldbook-core/src/ebook-review.mjs";
 import { ProjectStore } from "../../oldbook-core/src/project-store.mjs";
 import { DatasetStore } from "../../oldbook-core/src/dataset-store.mjs";
+import { planEntryRevision, assertSingleEntryCandidate } from "../../oldbook-core/src/desktop-work-units.mjs";
 import { previewSources, createImportedProject, createSampleProject, checkModelConnection,
   createSourceAdapters } from "../../oldbook-core/src/desktop-onboarding.mjs";
 
@@ -22,6 +24,9 @@ const historyStore = new HistoryStore(projectsRoot);
 const store = new ProjectStore(projectsRoot, historyStore);
 const ebookStore = new EbookStore(projectsRoot, store, historyStore);
 const ebookCandidates = new EbookCandidates(historyStore);
+const ebookReview = new EbookReview(projectsRoot, historyStore, {
+  skillPath: path.join(rootDir, "packages", "oldbook-skills", "oldbook-poetry-structuring", "SKILL.md")
+});
 const datasetStore = new DatasetStore(projectsRoot, rootDir);
 
 const app = express();
@@ -347,6 +352,41 @@ app.post("/api/projects/:projectId/ebook/revise-page", async (req, res) => {
     return;
   }
   res.json(result);
+});
+
+app.post("/api/projects/:projectId/ebook/revise-entry", async (req, res) => {
+  const projectId = safeProjectId(req.params.projectId);
+  const manualPrompt = String(req.body?.manual_prompt || "").trim();
+  if (!manualPrompt || manualPrompt.length > 6000) {
+    throw Object.assign(new Error("请输入不超过 6000 字的作品修订要求"), { status: 400 });
+  }
+  const document = (await ebookStore.read(projectId)).document;
+  const project = await store.index(projectId);
+  const availableResults = (document.source?.result_ids || [])
+    .filter(id => project.results.some(result => result.id === id && !result.archived));
+  if (!availableResults.length) availableResults.push(...project.results.filter(result => !result.archived)
+    .slice(0, 2).map(result => result.id));
+  const plan = planEntryRevision(document, req.body?.entry_id, availableResults.slice(0, 2));
+  const singleRevision = req.body?.revision_mode === "single_revision";
+  const directOverwrite = req.body?.apply_mode === "direct_overwrite";
+  const task = { schema_version: 1, id: `desktop-entry-${plan.entry_ids[0]}-${Date.now()}`,
+    mode: "structure", scope: "local", category: "单首作品修订", entry_ids: plan.entry_ids,
+    result_ids: plan.result_ids, rules: [
+      "本次只修订目标作品，其他作品即使同页也只能作为上下文，不得增删、重排或修改。",
+      `用户本次要求（最高优先级）：${manualPrompt}`
+    ], ...(singleRevision ? { revision_mode: "single_revision" } : {}),
+    ...(directOverwrite ? { apply_mode: "direct_overwrite" } : {}) };
+  const revision = await ebookReview.generate(projectId, task);
+  assertSingleEntryCandidate(document, revision.candidate, plan.entry_ids[0]);
+  if (directOverwrite) {
+    const saved = await ebookCandidates.approve(projectId, revision.run_id, {
+      candidate_hash: revision.candidate_hash, note: "用户选择直接覆盖此作品修订",
+      channel: "desktop", requested_by: "human"
+    }, ebookStore, auditFromRequest(req, { actor: "human", source: "desktop-entry-revision" }));
+    res.json({ revision, approved: true, document: saved.document, plan });
+    return;
+  }
+  res.json({ revision, approved: false, plan });
 });
 
 app.post("/api/projects/:projectId/ebook/revise-page/:runId/apply", async (req, res) => {
