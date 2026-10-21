@@ -44,10 +44,15 @@ async function main() {
     return;
   }
   if (command === "list") {
-    console.log(JSON.stringify(await store.list(required(options, "project")), null, 2));
+    console.log(JSON.stringify(await store.list(required(options, "project"), { includeArchived: options.all === "true" }), null, 2));
     return;
   }
-  throw new Error("Usage: dataset.mjs freeze|verify|list --project <id> [options]");
+  if (command === "archive" || command === "unarchive") {
+    await store.setArchived(required(options, "project"), required(options, "id"), command === "archive");
+    console.log(JSON.stringify({ id: options.id, archived: command === "archive" }, null, 2));
+    return;
+  }
+  throw new Error("Usage: dataset.mjs freeze|verify|list|archive|unarchive --project <id> [options]");
 }
 
 main().catch((error) => {

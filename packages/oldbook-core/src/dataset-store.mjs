@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { safeId } from "./project-store.mjs";
+import { atomicJson, safeId } from "./project-store.mjs";
 
 const DATASET_SCHEMA = 1;
 const LINK_SCHEMA = 1;
@@ -267,13 +267,47 @@ export class DatasetStore {
     return path.join(this.projectDirectory(projectId), "datasets", safeId(datasetId));
   }
 
-  async list(projectId) {
+  archivePath(projectId) {
+    return path.join(this.projectDirectory(projectId), "datasets", ".archive.json");
+  }
+
+  async archivedIds(projectId) {
+    try {
+      const archive = await readJson(this.archivePath(projectId));
+      if (archive.schema_version !== 1 || !Array.isArray(archive.archived_ids)) {
+        throw new Error("Invalid dataset archive index");
+      }
+      return new Set(archive.archived_ids.map(safeId));
+    } catch (error) {
+      if (error.code === "ENOENT") return new Set();
+      throw error;
+    }
+  }
+
+  async setArchived(projectId, datasetId, archived) {
+    safeId(datasetId);
+    await readJson(path.join(this.datasetDirectory(projectId, datasetId), "manifest.json"));
+    const ids = await this.archivedIds(projectId);
+    if (archived) ids.add(datasetId);
+    else ids.delete(datasetId);
+    await atomicJson(this.archivePath(projectId), {
+      schema_version: 1,
+      archived_ids: [...ids].sort()
+    });
+  }
+
+  async list(projectId, { includeArchived = false } = {}) {
     const root = path.join(this.projectDirectory(projectId), "datasets");
     const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+    const archivedIds = await this.archivedIds(projectId);
     const datasets = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-      try { datasets.push(await readJson(path.join(root, entry.name, "manifest.json"))); }
+      if (!includeArchived && archivedIds.has(entry.name)) continue;
+      try {
+        const manifest = await readJson(path.join(root, entry.name, "manifest.json"));
+        datasets.push(includeArchived ? { ...manifest, archived: archivedIds.has(entry.name) } : manifest);
+      }
       catch { /* Ignore incomplete directories. */ }
     }
     return datasets.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));

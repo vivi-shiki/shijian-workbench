@@ -1,6 +1,27 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { buildAlignment, finalTextTargets, normalizeForAlignment } from "../src/dataset-store.mjs";
+import { DatasetStore, buildAlignment, finalTextTargets, normalizeForAlignment } from "../src/dataset-store.mjs";
+
+test("archiving hides a frozen dataset without changing its files", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "oldbook-dataset-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, "book", "datasets", "pages-1-42");
+  await fs.mkdir(directory, { recursive: true });
+  const manifest = '{"id":"pages-1-42","created_at":"2026-01-01"}\n';
+  await fs.writeFile(path.join(directory, "manifest.json"), manifest);
+  const store = new DatasetStore(root);
+
+  assert.equal((await store.list("book")).length, 1);
+  await store.setArchived("book", "pages-1-42", true);
+  assert.deepEqual(await store.list("book"), []);
+  assert.equal((await store.list("book", { includeArchived: true }))[0].archived, true);
+  assert.equal(await fs.readFile(path.join(directory, "manifest.json"), "utf8"), manifest);
+  await store.setArchived("book", "pages-1-42", false);
+  assert.equal((await store.list("book")).length, 1);
+});
 
 test("normalization removes punctuation and preserves readable characters", () => {
   assert.equal(normalizeForAlignment("疑雨集：其一。"), "疑雨集其一");
