@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BookOpen, CheckCircle2, ChevronDown, Database, Link2 } from "lucide-react";
 import DatasetWorkspace from "./DatasetWorkspace.jsx";
 import OnboardingWorkspace from "./OnboardingWorkspace.jsx";
+import ProjectOverview from "./ProjectOverview.jsx";
 import "./styles.css";
 
 async function fetchJson(url, signal) {
@@ -228,7 +229,7 @@ function App() {
       onCreated={(id) => { window.location.href = `/?project=${encodeURIComponent(id)}`; }} />;
   }
   return (
-    <main className="reader-app">
+    <main className={`reader-app ${data && !data.manifest ? "with-overview" : ""}`}>
       <header className="reader-header">
         <div className="reader-brand">
           <BookOpen size={22} aria-hidden="true" />
@@ -254,6 +255,9 @@ function App() {
           </label>
         </div>
       </header>
+      {data && !data.manifest ? <ProjectOverview key={projectId} projectId={projectId}
+        pageRange={livePageRange} resultIds={(data.project?.results || []).filter(item => !item.archived).map(item => item.id)}
+        modelConfigured={data.model_config?.configured} /> : null}
       {error ? <div className="reader-error" role="alert">{error}</div> : null}
       {data ? <DatasetWorkspace key={`${projectId}:${scope}`} data={data} onPageRequest={data.manifest ? null : loadLivePage} onEnsureRange={data.manifest ? null : loadLiveRange} onRevisePage={data.manifest ? null : reviseLivePage} onReviseEntry={data.manifest ? null : reviseLiveEntry} onApplyPageRevision={data.manifest ? null : applyPageRevision} /> : <div className="reader-loading">正在读取对照资料…</div>}
     </main>

@@ -84,6 +84,20 @@ test("conflicting writes on one project cannot run at the same time", async (t) 
   await queue.cancel(running.id);
 });
 
+test("simultaneous enqueue calls reserve a project before either starts", async (t) => {
+  const directory = await jobDirectory(t);
+  const queue = new JobQueue({ directory, runners: { ocr: async ({ signal }) => {
+    await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  } } });
+  const outcomes = await Promise.allSettled([
+    queue.enqueue({ type: "ocr", project_id: "book" }),
+    queue.enqueue({ type: "ocr", project_id: "book" })
+  ]);
+  assert.equal(outcomes.filter(item => item.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter(item => item.status === "rejected").length, 1);
+  await queue.cancel(outcomes.find(item => item.status === "fulfilled").value.id);
+});
+
 test("cost estimate distinguishes known prices, unknown prices, and a configured budget", () => {
   assert.deepEqual(estimateModelCost({ pages: 10, tokensPerPage: 1000, pricePerMillionTokens: 2 }),
     { known: true, estimated_cost: 0.02, currency: "USD", over_budget: false });

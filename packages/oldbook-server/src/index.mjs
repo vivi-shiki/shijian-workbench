@@ -10,6 +10,7 @@ import { EbookReview } from "../../oldbook-core/src/ebook-review.mjs";
 import { ProjectStore } from "../../oldbook-core/src/project-store.mjs";
 import { DatasetStore } from "../../oldbook-core/src/dataset-store.mjs";
 import { planEntryRevision, assertSingleEntryCandidate } from "../../oldbook-core/src/desktop-work-units.mjs";
+import { JobQueue, summarizeProject, estimateModelCost } from "../../oldbook-core/src/desktop-jobs.mjs";
 import { previewSources, createImportedProject, createSampleProject, checkModelConnection,
   createSourceAdapters } from "../../oldbook-core/src/desktop-onboarding.mjs";
 
@@ -28,6 +29,22 @@ const ebookReview = new EbookReview(projectsRoot, historyStore, {
   skillPath: path.join(rootDir, "packages", "oldbook-skills", "oldbook-poetry-structuring", "SKILL.md")
 });
 const datasetStore = new DatasetStore(projectsRoot, rootDir);
+const jobQueue = new JobQueue({ directory: path.join(projectsRoot, ".desktop-jobs"), runners: {
+  structure: async ({ project_id: projectId, start_page: startPage, end_page: endPage,
+    result_ids: resultIds, chunk_size: chunkSize, checkpoint, report, signal }) => {
+    const first = Math.max(startPage, (checkpoint?.completed || startPage - 1) + 1);
+    const runs = checkpoint?.runs || [];
+    for (let page = first; page <= endPage; page += chunkSize) {
+      if (signal.aborted) throw signal.reason;
+      const end = Math.min(endPage, page + chunkSize - 1);
+      const result = await ebookStore.run(projectId, { start_page: page, end_page: end,
+        result_ids: resultIds, chunk_size: chunkSize });
+      runs.push(result.candidate.run_id);
+      await report({ completed: end, total: endPage, checkpoint: { completed: end, runs: [...runs] },
+        last_run_id: result.candidate.run_id });
+    }
+  }
+} });
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
@@ -269,6 +286,63 @@ app.get("/api/projects/:projectId/reader", async (req, res) => {
   }
 });
 
+app.get("/api/projects/:projectId/overview", async (req, res) => {
+  const projectId = safeProjectId(req.params.projectId);
+  const [project, ebook, jobs] = await Promise.all([store.view(projectId), ebookStore.read(projectId), jobQueue.list(projectId)]);
+  const regions = project.pages.flatMap(page => page.regions || []);
+  res.json({ overview: summarizeProject({ pages: project.pages, regions,
+    entries: ebook.document.entries, jobs }), jobs });
+});
+
+app.post("/api/projects/:projectId/jobs/estimate", async (req, res) => {
+  const project = await store.index(safeProjectId(req.params.projectId));
+  const start = Number(req.body?.start_page) || project.source?.pages?.[0]?.page_number || 1;
+  const end = Number(req.body?.end_page) || project.source?.pages?.at(-1)?.page_number || start;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end < start ||
+      end > (project.source?.pages?.at(-1)?.page_number || 0)) {
+    throw Object.assign(new Error("页码范围无效"), { status: 400 });
+  }
+  const price = Number(process.env.SILICONFLOW_PRICE_PER_MILLION_TOKENS);
+  res.json({ estimate: estimateModelCost({ pages: end - start + 1, tokensPerPage: 2000,
+    pricePerMillionTokens: price > 0 ? price : undefined,
+    budget: req.body?.budget == null ? undefined : Number(req.body.budget) }),
+  page_range: { start, end }, warning: "模型费用为估计值，实际消耗以服务商账单为准。" });
+});
+
+app.post("/api/projects/:projectId/jobs", async (req, res) => {
+  const projectId = safeProjectId(req.params.projectId);
+  if (req.body?.type !== "structure") throw Object.assign(new Error("仅支持结构化任务"), { status: 400 });
+  if (req.body?.confirm_cost !== true) throw Object.assign(new Error("请先确认模型费用与处理时间"), { status: 400 });
+  const project = await store.index(projectId);
+  const start = Number(req.body.start_page) || project.source?.pages?.[0]?.page_number || 1;
+  const end = Number(req.body.end_page) || project.source?.pages?.at(-1)?.page_number || start;
+  const chunkSize = Number(req.body.chunk_size) || 5;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end < start ||
+      end > (project.source?.pages?.at(-1)?.page_number || 0) ||
+      !Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > 20) {
+    throw Object.assign(new Error("页码或分批大小无效"), { status: 400 });
+  }
+  const resultIds = (req.body.result_ids || []).filter(id =>
+    project.results.some(item => item.id === id && !item.archived)).slice(0, 2);
+  if (!resultIds.length) throw Object.assign(new Error("请先选择 OCR 结果"), { status: 400 });
+  const price = Number(process.env.SILICONFLOW_PRICE_PER_MILLION_TOKENS);
+  const estimate = estimateModelCost({ pages: end - start + 1, tokensPerPage: 2000,
+    pricePerMillionTokens: price > 0 ? price : undefined,
+    budget: req.body.budget == null ? undefined : Number(req.body.budget) });
+  if (estimate.over_budget) throw Object.assign(new Error("预计费用超过设定预算"), { status: 400 });
+  res.status(202).json({ job: await jobQueue.enqueue({ type: "structure", project_id: projectId,
+    start_page: start, end_page: end, result_ids: resultIds, chunk_size: chunkSize }), estimate });
+});
+
+app.post("/api/projects/:projectId/jobs/:jobId/:action", async (req, res) => {
+  const projectId = safeProjectId(req.params.projectId);
+  const job = await jobQueue.get(req.params.jobId);
+  if (job.project_id !== projectId) throw Object.assign(new Error("任务不属于该项目"), { status: 404 });
+  const action = req.params.action;
+  if (!["pause", "resume", "cancel"].includes(action)) throw Object.assign(new Error("无效任务操作"), { status: 400 });
+  res.json({ job: await jobQueue[action](job.id) });
+});
+
 app.get("/api/project/:projectId", async (req, res) => {
   try {
     const project = await readProject(req.params.projectId, req.query.result);
@@ -468,6 +542,7 @@ app.use((error, _req, res, _next) => {
   res.status(error.status || 500).json({ error: error.message });
 });
 
+await jobQueue.recoverInterrupted();
 app.listen(3100, "127.0.0.1", () => {
   console.log("API listening on http://127.0.0.1:3100");
   historyStore.startMonitoring();
