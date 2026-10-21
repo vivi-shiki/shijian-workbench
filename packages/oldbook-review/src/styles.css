@@ -1621,3 +1621,25 @@ button:disabled { cursor: default; opacity: .65; }
     overflow: visible;
   }
 }
+.onboarding-page { min-height: 100vh; padding: 32px max(24px, calc((100vw - 980px) / 2)); background: #f5f1e9; color: #29251f; font-family: system-ui, sans-serif; }
+.onboarding-page > header { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+.onboarding-page > header h1 { margin: 0; font-size: 30px; }
+.onboarding-page > header p { margin: 2px 0 0; color: #746c61; }
+.onboarding-page > header button { margin-left: auto; }
+.onboarding-card { margin: 18px 0; padding: 24px; border: 1px solid #ddd3c5; border-radius: 14px; background: #fffdf9; box-shadow: 0 8px 24px #493a2510; }
+.onboarding-card h2 { margin: 0 0 8px; font-size: 21px; }
+.onboarding-card p { color: #625a50; line-height: 1.5; }
+.onboarding-card label { display: flex; flex-direction: column; gap: 6px; margin: 14px 0; font-weight: 600; }
+.onboarding-card input { width: 100%; padding: 10px 12px; border: 1px solid #c9bfb1; border-radius: 7px; font: inherit; }
+.onboarding-card button, .onboarding-page > header button, .reader-new-project { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 14px; border: 1px solid #b7a792; border-radius: 7px; background: #f9f4e9; color: #302920; cursor: pointer; font: inherit; }
+.onboarding-card button:disabled { opacity: .5; cursor: not-allowed; }
+.onboarding-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.onboarding-actions button:last-child { background: #155b59; color: white; border-color: #155b59; }
+.onboarding-sources { list-style: decimal; padding: 0 0 0 24px; }
+.onboarding-sources li { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.onboarding-sources li span { overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; }
+.onboarding-sources li button { padding: 5px; }
+.onboarding-plan { padding: 12px; border-radius: 7px; background: #eef4f0; }
+.onboarding-busy, .onboarding-error { padding: 12px; border-radius: 7px; }
+.onboarding-error { background: #ffebe5; color: #932b1b; }
+.reader-new-project { white-space: nowrap; }

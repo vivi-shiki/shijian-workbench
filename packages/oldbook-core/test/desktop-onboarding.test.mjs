@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { previewSources, createImportedProject, installSampleProject, checkModelConnection } from "../src/desktop-onboarding.mjs";
+import { previewSources, createImportedProject, installSampleProject, checkModelConnection,
+  createSourceAdapters, createSampleProject } from "../src/desktop-onboarding.mjs";
 
 async function workspace(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "oldbook-onboarding-"));
@@ -100,4 +101,41 @@ test("model connection check reports wrong credentials and outages without retur
     fetchImpl: async () => { throw new Error("network unavailable"); } });
   assert.equal(offline.reason, "unavailable");
   assert.ok(!JSON.stringify(offline).includes(key));
+});
+
+test("built-in PDF renderer imports a real one-page PDF without Python", async (t) => {
+  const root = await workspace(t);
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>",
+    "<< /Length 0 >>\nstream\n\nendstream"
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((body, index) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 5\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const filename = path.join(root, "one.pdf");
+  await fs.writeFile(filename, pdf);
+  const plan = await previewSources([{ kind: "pdf", path: filename }]);
+  assert.equal(plan.page_count, 1);
+  const project = await createImportedProject({ root, id: "one-page", title: "一页书", plan,
+    adapters: createSourceAdapters() });
+  const image = await fs.readFile(path.join(root, "one-page", "pages", "page-001.png"));
+  assert.equal(image.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  assert.equal(project.source.pages[0].width, 134);
+});
+
+test("generated sample contains an image, OCR evidence and a readable poem", async (t) => {
+  const root = await workspace(t);
+  const project = await createSampleProject(root);
+  const ebook = JSON.parse(await fs.readFile(path.join(root, project.id, "ebook", "structured.json"), "utf8"));
+  const result = JSON.parse(await fs.readFile(path.join(root, project.id, "results", "source.json"), "utf8"));
+  assert.equal(ebook.entries[0].kind, "poem");
+  assert.equal(ebook.entries[0].lines.length, 4);
+  assert.equal(result.pages[0].regions.length, 5);
 });

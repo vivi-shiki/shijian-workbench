@@ -1,12 +1,15 @@
 import express from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { HistoryStore } from "../../oldbook-core/src/change-history.mjs";
 import { EbookStore } from "../../oldbook-core/src/ebook-store.mjs";
 import { EbookCandidates } from "../../oldbook-core/src/ebook-candidates.mjs";
 import { ProjectStore } from "../../oldbook-core/src/project-store.mjs";
 import { DatasetStore } from "../../oldbook-core/src/dataset-store.mjs";
+import { previewSources, createImportedProject, createSampleProject, checkModelConnection,
+  createSourceAdapters } from "../../oldbook-core/src/desktop-onboarding.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "../../..");
@@ -14,7 +17,7 @@ for (const envFile of [".env.local", ".env"]) {
   try { process.loadEnvFile(path.join(rootDir, envFile)); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
-const projectsRoot = path.join(rootDir, "data", "projects");
+const projectsRoot = path.resolve(process.env.OLDBOOK_PROJECTS_ROOT || path.join(rootDir, "data", "projects"));
 const historyStore = new HistoryStore(projectsRoot);
 const store = new ProjectStore(projectsRoot, historyStore);
 const ebookStore = new EbookStore(projectsRoot, store, historyStore);
@@ -23,6 +26,7 @@ const datasetStore = new DatasetStore(projectsRoot, rootDir);
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
+app.use("/data/projects", express.static(projectsRoot));
 app.use("/data", express.static(path.join(rootDir, "data")));
 
 function safeProjectId(projectId) {
@@ -204,6 +208,33 @@ app.get("/api/projects", async (_req, res) => {
     defaultProjectId: configuredProject?.id || projects.find(project => !project.archived)?.id || projects[0]?.id || null,
     projects
   });
+});
+
+app.post("/api/onboarding/preview", async (req, res) => {
+  res.json(await previewSources(req.body?.sources));
+});
+
+app.post("/api/onboarding/create", async (req, res) => {
+  const sources = req.body?.sources;
+  const plan = await previewSources(sources);
+  const id = req.body?.id || `book-${crypto.randomBytes(5).toString("hex")}`;
+  const project = await createImportedProject({ root: projectsRoot, id,
+    title: req.body?.title, plan, adapters: createSourceAdapters() });
+  res.status(201).json({ id: project.id, title: project.title, pages: plan.page_count });
+});
+
+app.post("/api/onboarding/sample", async (_req, res) => {
+  const filename = path.join(projectsRoot, "sample-poetry", "project.json");
+  const existing = await fs.readFile(filename, "utf8").then(JSON.parse).catch(error => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const project = existing || await createSampleProject(projectsRoot);
+  res.status(existing ? 200 : 201).json({ id: project.id, title: project.title, pages: 1 });
+});
+
+app.post("/api/onboarding/model-check", async (req, res) => {
+  res.json(await checkModelConnection({ baseUrl: req.body?.baseUrl, apiKey: req.body?.apiKey }));
 });
 
 app.get("/api/projects/:projectId/reader", async (req, res) => {

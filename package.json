@@ -38,13 +38,14 @@
     "ocr:remote-paddlevl": "python packages/oldbook-cli/src/ocr/run_remote_paddlevl.py"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.13",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^9.2.1",
     "express": "^5.2.1",
     "lucide-react": "^0.562.0",
-    "vite": "^8.0.0",
+    "pdfjs-dist": "^6.4.299",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
-  },
-  "devDependencies": {}
+    "react-dom": "^19.2.3",
+    "vite": "^8.0.0"
+  }
 }

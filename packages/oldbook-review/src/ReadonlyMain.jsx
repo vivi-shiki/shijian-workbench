@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { BookOpen, CheckCircle2, ChevronDown, Database, Link2 } from "lucide-react";
 import DatasetWorkspace from "./DatasetWorkspace.jsx";
+import OnboardingWorkspace from "./OnboardingWorkspace.jsx";
 import "./styles.css";
 
 async function fetchJson(url, signal) {
@@ -32,6 +33,8 @@ function mergeLiveData(current, incoming) {
 
 function App() {
   const [projects, setProjects] = React.useState([]);
+  const [projectsLoaded, setProjectsLoaded] = React.useState(false);
+  const [onboardingOpen, setOnboardingOpen] = React.useState(false);
   const [projectId, setProjectId] = React.useState("");
   const [datasets, setDatasets] = React.useState([]);
   const [scope, setScope] = React.useState("");
@@ -56,7 +59,8 @@ function App() {
             ? payload.defaultProjectId
             : visibleProjects[0]?.id || "");
       })
-      .catch((reason) => setError(reason.message));
+      .catch((reason) => setError(reason.message))
+      .finally(() => setProjectsLoaded(true));
   }, []);
 
   React.useEffect(() => {
@@ -199,6 +203,10 @@ function App() {
     window.history.replaceState(null, "", url);
     setScope(nextScope);
   }
+  if (onboardingOpen || (projectsLoaded && !projectId && !error)) {
+    return <OnboardingWorkspace onClose={projectId ? () => setOnboardingOpen(false) : null}
+      onCreated={(id) => { window.location.href = `/?project=${encodeURIComponent(id)}`; }} />;
+  }
   return (
     <main className="reader-app">
       <header className="reader-header">
@@ -215,6 +223,7 @@ function App() {
           {data?.links?.summary?.coverage != null ? <em><Link2 size={13} /> {Math.round(data.links.summary.coverage * 100)}% 已连接</em> : data && !data.manifest ? <em>未生成连接</em> : null}
         </div>
         <div className="reader-selectors">
+          <button type="button" className="reader-new-project" onClick={() => setOnboardingOpen(true)}>新建项目</button>
           <label className="reader-select-control">
             <span>项目</span>
             <div><select value={projectId} onChange={(event) => selectProject(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></div>
